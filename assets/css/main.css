@@ -132,7 +132,7 @@ input {
   display: grid;
   min-height: 0;
   flex: 1;
-  grid-template-columns: 250px minmax(0, 1fr);
+  grid-template-columns: 280px minmax(0, 1fr);
 }
 
 .sidebar {
@@ -164,13 +164,6 @@ input {
   min-width: 0;
   align-items: center;
   gap: 6px;
-}
-
-.device-row button {
-  width: 38px;
-  min-width: 38px;
-  height: 34px;
-  flex: 0 0 38px;
 }
 
 .field-label {
@@ -302,7 +295,7 @@ input {
 
 .action-grid {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 6px;
   margin-top: 7px;
 }
@@ -402,6 +395,7 @@ kbd {
   min-height: 32px;
   flex: 0 0 auto;
   align-items: center;
+  flex-wrap: nowrap;
   gap: 9px;
   margin-bottom: 8px;
 }
@@ -432,12 +426,10 @@ kbd {
   width: 210px;
 }
 
-.filter-row {
+.severity-filter {
   display: flex;
   align-items: center;
   gap: 4px;
-  padding: 0 0 9px;
-  border-bottom: 1px solid var(--app-border);
 }
 
 .filter-count {
@@ -519,44 +511,45 @@ kbd {
   color: var(--app-faint);
 }
 
-.empty-state {
+.empty-panel {
+  width: 100%;
+  min-height: 280px;
+  height: 100%;
+}
+
+.empty-panel-content {
   display: flex;
-  min-height: 240px;
+  max-width: 460px;
   align-items: center;
-  justify-content: center;
   flex-direction: column;
-  gap: 7px;
-  color: var(--app-muted);
-  font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", sans-serif;
+  gap: 8px;
   text-align: center;
 }
 
-.empty-state p {
+.empty-panel-icon {
+  display: grid;
+  width: 44px;
+  height: 44px;
+  place-items: center;
+  border-radius: 12px;
+}
+
+.empty-panel-icon svg {
+  width: 22px;
+  height: 22px;
+}
+
+.empty-panel-title {
+  margin: 2px 0 0;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.empty-panel-description {
   margin: 0;
-  color: var(--app-faint);
+  color: var(--app-muted);
   font-size: 11px;
-}
-
-.empty-state.compact {
-  min-height: 150px;
-  padding: 30px;
-  font-size: 11px;
-}
-
-.empty-icon {
-  width: 30px;
-  height: 30px;
-  color: #4a5870;
-}
-
-.empty-icon.success {
-  color: var(--app-green);
-}
-
-.panel-empty {
-  flex: 1;
-  border: 1px dashed var(--app-border-strong);
-  border-radius: 10px;
+  line-height: 1.6;
 }
 
 .issues-layout {
@@ -769,7 +762,7 @@ kbd {
 
 @media (max-width: 1080px) {
   .workspace {
-    grid-template-columns: 220px minmax(0, 1fr);
+    grid-template-columns: 230px minmax(0, 1fr);
   }
 
   .brand {
@@ -782,6 +775,14 @@ kbd {
 
   .event-filter {
     width: 165px;
+  }
+
+  .pane-toolbar {
+    flex-wrap: wrap;
+  }
+
+  .action-grid {
+    grid-template-columns: 1fr;
   }
 }
 

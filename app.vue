@@ -200,6 +200,18 @@ const runDotClass = computed(() => {
 
 const firstError = computed(() => errors.value.at(-1)?.text || '')
 const latestEvents = computed(() => events.value.slice(-80))
+const logEmptyTitle = computed(() => {
+  if (logMeta.value === '尚未搜索') return '尚未搜索日志'
+  if (/不存在|失败|错误|not found/i.test(logMeta.value)) return '日志暂不可用'
+  return '没有匹配的日志'
+})
+const logEmptyDescription = computed(() => {
+  if (logMeta.value === '尚未搜索') {
+    return `输入关键字后搜索 ${platformName.value} decoded.log。`
+  }
+  if (/不存在|失败|错误|not found/i.test(logMeta.value)) return logMeta.value
+  return '调整关键字或正则条件后重试。'
+})
 
 async function initializePlatform(key: PlatformKey) {
   const current = runners[key]
@@ -417,25 +429,31 @@ onBeforeUnmount(() => {
                 :icon="platform === 'ios' ? 'i-heroicons-device-phone-mobile' : 'i-heroicons-device-tablet'"
                 searchable
                 searchable-placeholder="搜索设备"
-                class="min-w-0 flex-1"
+                class="w-full"
                 @update:model-value="handleDeviceChange"
-              />
-              <UTooltip text="重新检测已连接设备">
-                <UButton
-                  color="primary"
-                  variant="soft"
-                  icon="i-heroicons-arrow-path"
-                  square
-                  :loading="refreshingDevices[platform]"
-                  aria-label="重新检测设备"
-                  @click="refreshCurrentDevices"
-                />
-              </UTooltip>
+              >
+                <template #empty>
+                  未检测到设备，请连接后重新检测
+                </template>
+                <template #option-empty="{ query }">
+                  未找到“{{ query }}”
+                </template>
+              </USelectMenu>
             </div>
+            <UButton
+              color="primary"
+              variant="ghost"
+              icon="i-heroicons-arrow-path"
+              block
+              size="sm"
+              :loading="refreshingDevices[platform]"
+              @click="refreshCurrentDevices"
+            >
+              重新检测设备
+            </UButton>
             <div class="field-hint">
               <span class="mini-dot" :class="{ online: connectedDevice?.available }" />
               {{ connectedDevice?.name || `未检测到 ${platformName} 设备` }}
-              <span class="hint-separator">· 可点右侧刷新</span>
             </div>
           </div>
 
@@ -571,6 +589,23 @@ onBeforeUnmount(() => {
                   <span>{{ runLabel }}</span>
                   <span v-if="busy" class="elapsed">{{ elapsed }}s</span>
                 </div>
+                <div class="severity-filter">
+                  <UButton
+                    v-for="item in severityOptions"
+                    :key="item.key"
+                    :color="severity === item.key ? 'primary' : 'gray'"
+                    :variant="severity === item.key ? 'soft' : 'ghost'"
+                    size="xs"
+                    @click="severity = item.key"
+                  >
+                    {{ item.label }}
+                    <span v-if="item.key === 'error' && errors.length" class="filter-count">{{ errors.length }}</span>
+                    <span v-else-if="item.key === 'warning' && warnings.length" class="filter-count">{{ warnings.length }}</span>
+                  </UButton>
+                </div>
+                <span class="event-summary">
+                  {{ filteredEvents.length }} / {{ events.length }} 条
+                </span>
                 <div class="toolbar-spacer" />
                 <UInput
                   id="event-filter"
@@ -591,34 +626,21 @@ onBeforeUnmount(() => {
                 </UButton>
               </div>
 
-              <div class="filter-row">
-                <UButton
-                  v-for="item in severityOptions"
-                  :key="item.key"
-                  :color="severity === item.key ? 'primary' : 'gray'"
-                  :variant="severity === item.key ? 'soft' : 'ghost'"
-                  size="xs"
-                  @click="severity = item.key"
-                >
-                  {{ item.label }}
-                  <span v-if="item.key === 'error' && errors.length" class="filter-count">{{ errors.length }}</span>
-                  <span v-else-if="item.key === 'warning' && warnings.length" class="filter-count">{{ warnings.length }}</span>
-                </UButton>
-                <div class="toolbar-spacer" />
-                <span class="event-summary">
-                  {{ filteredEvents.length }} / {{ events.length }} 条
-                </span>
-              </div>
-
-              <div ref="eventPane" class="event-console">
-                <div v-if="!events.length" class="empty-state">
-                  <UIcon name="i-heroicons-command-line" class="empty-icon" />
-                  <div>还没有运行记录</div>
-                  <p>点击「构建并启动」，{{ platformName }} 日志会实时出现在这里。</p>
-                </div>
-                <div v-else-if="!filteredEvents.length" class="empty-state compact">
-                  没有符合当前过滤条件的事件
-                </div>
+              <AppEmptyState
+                v-if="!events.length"
+                class="pane-body"
+                icon="i-heroicons-command-line"
+                title="还没有运行记录"
+                :description="`点击「构建并启动」，${platformName} 日志会实时出现在这里。`"
+              />
+              <AppEmptyState
+                v-else-if="!filteredEvents.length"
+                class="pane-body"
+                icon="i-heroicons-funnel"
+                title="没有匹配记录"
+                description="调整关键字或筛选条件后重试。"
+              />
+              <div v-else ref="eventPane" class="event-console">
                 <div
                   v-for="event in filteredEvents"
                   :key="event.id"
@@ -726,11 +748,13 @@ onBeforeUnmount(() => {
                   </div>
                 </UCard>
               </div>
-              <div v-else class="empty-state panel-empty pane-body">
-                <UIcon name="i-heroicons-shield-check" class="empty-icon success" />
-                <div>当前运行没有错误</div>
-                <p>{{ jobDone ? '构建和启动日志中尚未发现错误。' : '运行结束后这里会显示错误与源码位置。' }}</p>
-              </div>
+              <AppEmptyState
+                v-else
+                class="pane-body"
+                icon="i-heroicons-shield-check"
+                title="当前运行没有错误"
+                :description="jobDone ? '构建和启动日志中尚未发现错误。' : '运行结束后这里会显示错误与源码位置。'"
+              />
             </section>
 
             <section v-else class="pane">
@@ -750,16 +774,20 @@ onBeforeUnmount(() => {
                   搜索
                 </UButton>
               </div>
-              <div class="log-result pane-body">
-                <div v-if="!logs.length" class="empty-state compact">
-                  {{ logMeta }}
-                </div>
+              <AppEmptyState
+                v-if="!logs.length"
+                class="pane-body"
+                :icon="logEmptyTitle === '日志暂不可用' ? 'i-heroicons-exclamation-triangle' : 'i-heroicons-document-magnifying-glass'"
+                :title="logEmptyTitle"
+                :description="logEmptyDescription"
+              />
+              <div v-else class="log-result pane-body">
                 <div v-for="line in logs" :key="line.n" class="log-line">
                   <span>{{ line.n }}</span>
                   <code>{{ line.text }}</code>
                 </div>
               </div>
-              <div class="log-meta">{{ logMeta }}</div>
+              <div v-if="logs.length" class="log-meta">{{ logMeta }}</div>
             </section>
           </div>
         </main>
