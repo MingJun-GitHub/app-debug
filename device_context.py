@@ -7,9 +7,9 @@ write to their private sandboxes.
 
 from __future__ import annotations
 
+import base64
 import json
 import plistlib
-import struct
 import subprocess
 import tempfile
 from datetime import datetime, timezone
@@ -393,27 +393,68 @@ def parse_android_ab_preferences(blob: bytes) -> dict[str, Any]:
     return parse_sensor_ab_json(raw_value)
 
 
+def parse_android_sensor_identity(blob: bytes) -> dict[str, str]:
+    root = ElementTree.fromstring(blob)
+    values: dict[str, str] = {}
+    for node in root:
+        if node.tag == "string" and node.attrib.get("name"):
+            values[node.attrib["name"]] = node.text or ""
+
+    device_id = ""
+    encoded_ids = values.get("user_ids", "")
+    if encoded_ids.startswith("Base64:"):
+        try:
+            decoded = base64.b64decode(encoded_ids.removeprefix("Base64:"))
+            identities = json.loads(decoded)
+            device_id = _text(identities.get("$identity_android_id"))
+        except Exception:  # noqa: BLE001
+            pass
+
+    return {
+        "deviceId": device_id,
+        "distinctId": values.get("events_distinct_id", ""),
+    }
+
+
 def parse_mmkv_value(blob: bytes, key: str) -> Any:
     """Extract a plain scalar/string value from an unencrypted MMKV container."""
     key_bytes = key.encode("utf-8")
+
+    def read_varint(position: int) -> tuple[int, int] | None:
+        value = 0
+        shift = 0
+        for offset in range(5):
+            index = position + offset
+            if index >= len(blob):
+                return None
+            byte = blob[index]
+            value |= (byte & 0x7F) << shift
+            if not byte & 0x80:
+                return value, index + 1
+            shift += 7
+        return None
+
     start = 0
     while True:
         position = blob.find(key_bytes, start)
         if position < 0:
             return None
         start = position + 1
-        if position < 4:
+        key_end = position + len(key_bytes)
+        decoded_key_length = read_varint(position - 1)
+        if not decoded_key_length:
             continue
-        key_length = struct.unpack_from("<I", blob, position - 4)[0]
-        if key_length != len(key_bytes):
+        key_length, key_length_end = decoded_key_length
+        if key_length != len(key_bytes) or key_length_end != position:
             continue
-        value_header = position + len(key_bytes)
-        if value_header + 4 > len(blob):
+        if key_end >= len(blob):
             continue
-        value_length = struct.unpack_from("<I", blob, value_header)[0]
+        decoded_value_length = read_varint(key_end)
+        if not decoded_value_length:
+            continue
+        value_length, value_start = decoded_value_length
         if value_length > 10 * 1024 * 1024:
             continue
-        value_start = value_header + 4
         value_end = value_start + value_length
         if value_end > len(blob):
             continue
@@ -422,10 +463,18 @@ def parse_mmkv_value(blob: bytes, key: str) -> Any:
             return ""
         if len(payload) == 1 and payload[0] in (0, 1):
             return bool(payload[0])
-        try:
-            return payload.rstrip(b"\x00").decode("utf-8")
-        except UnicodeDecodeError:
-            return payload
+        decoded_string_length = read_varint(value_start)
+        if decoded_string_length:
+            string_length, string_start = decoded_string_length
+            string_end = string_start + string_length
+            if string_end == value_end:
+                try:
+                    return blob[string_start:string_end].decode("utf-8")
+                except UnicodeDecodeError:
+                    pass
+        if len(payload) in (4, 8):
+            return int.from_bytes(payload, "little", signed=True)
+        return payload
 
 
 def _mmkv_string(blob: bytes, key: str) -> str:
@@ -437,6 +486,7 @@ def read_android_app_context(serial: str) -> dict[str, Any]:
     warnings: list[str] = []
     prefs: dict[str, Any] = {}
     ab_data: dict[str, Any] = {}
+    sensor_identity: dict[str, str] = {}
     mmkv_values: list[bytes] = []
 
     shared_prefs = _adb_package_output(serial, ["cat", "shared_prefs/spUtils.xml"])
@@ -447,6 +497,16 @@ def read_android_app_context(serial: str) -> dict[str, Any]:
             warnings.append(f"Android AB 缓存解析失败: {exc}")
     else:
         warnings.append("无法读取 Android AB 缓存，确认当前安装的是 Debug 包且已启动过 App。")
+
+    sensor_preferences = _adb_package_output(
+        serial,
+        ["cat", "shared_prefs/com.sensorsdata.analytics.android.sdk.SensorsDataAPI.xml"],
+    )
+    if sensor_preferences:
+        try:
+            sensor_identity = parse_android_sensor_identity(sensor_preferences)
+        except Exception as exc:  # noqa: BLE001
+            warnings.append(f"Android 神策身份解析失败: {exc}")
 
     listing = _adb_package_output(serial, ["ls", "-1", "files/mmkv"])
     for filename in listing.decode("utf-8", errors="replace").splitlines():
@@ -469,11 +529,11 @@ def read_android_app_context(serial: str) -> dict[str, Any]:
             _mmkv_string(blob, "original_SENSOR_ANONYMOUS_ID")
             for blob in mmkv_values
         ]
-        production_site = next(
+        production_environment_site = next(
             (_mmkv_string(blob, "test_cur_site_config_data") for blob in mmkv_values if _mmkv_string(blob, "test_cur_site_config_data")),
             "",
         )
-        test_site = next(
+        test_environment_site = next(
             (_mmkv_string(blob, "cur_site_config_data") for blob in mmkv_values if _mmkv_string(blob, "cur_site_config_data")),
             "",
         )
@@ -481,7 +541,13 @@ def read_android_app_context(serial: str) -> dict[str, Any]:
             (value for value in environment_values if isinstance(value, bool)),
             None,
         )
-        raw_site = test_site if environment_flag is True else production_site
+        # The app stores the test-environment site separately from the
+        # production-environment site in the same MMKV container.
+        raw_site = (
+            test_environment_site
+            if environment_flag is True
+            else production_environment_site
+        )
         try:
             site = json.loads(raw_site) if raw_site else {}
         except json.JSONDecodeError:
@@ -511,8 +577,8 @@ def read_android_app_context(serial: str) -> dict[str, Any]:
             "country": prefs.get("country") or "",
         },
         "ids": {
-            "deviceId": prefs.get("deviceId") or "",
-            "distinctId": ab_data.get("distinctId") or "",
+            "deviceId": prefs.get("deviceId") or sensor_identity.get("deviceId") or "",
+            "distinctId": sensor_identity.get("distinctId") or ab_data.get("distinctId") or "",
         },
         "experiments": experiments,
         "outExperiments": out_experiments,

@@ -1,10 +1,12 @@
+import base64
+import json
 import plistlib
-import struct
 import unittest
 
 from device_context import (
     _decode_ns_keyed_archive,
     parse_android_ab_preferences,
+    parse_android_sensor_identity,
     parse_ios_preferences,
     parse_mmkv_value,
     parse_sensor_ab_json,
@@ -18,6 +20,18 @@ def archive(objects, root=1):
         "$top": {"root": plistlib.UID(root)},
         "$objects": objects,
     }, fmt=plistlib.FMT_BINARY)
+
+
+def varint(value):
+    encoded = bytearray()
+    while True:
+        byte = value & 0x7F
+        value >>= 7
+        if value:
+            encoded.append(byte | 0x80)
+        else:
+            encoded.append(byte)
+            return bytes(encoded)
 
 
 class DeviceContextTest(unittest.TestCase):
@@ -75,16 +89,30 @@ class DeviceContextTest(unittest.TestCase):
 
     def test_parses_unencrypted_mmkv_value(self):
         key = b"is_dev_environment"
-        entry = struct.pack("<I", len(key)) + key + struct.pack("<I", 1) + b"\x01"
-        blob = struct.pack("<I", len(entry)) + entry
+        entry = varint(len(key)) + key + varint(1) + b"\x01"
+        blob = varint(len(entry)) + entry
         self.assertIs(parse_mmkv_value(blob, "is_dev_environment"), True)
 
     def test_parses_mmkv_string(self):
         key = b"original_SENSOR_ANONYMOUS_ID"
         value = b"anonymous-1"
-        entry = struct.pack("<I", len(key)) + key + struct.pack("<I", len(value)) + value
-        blob = struct.pack("<I", len(entry)) + entry
+        payload = varint(len(value)) + value
+        entry = varint(len(key)) + key + varint(len(payload)) + payload
+        blob = varint(len(entry)) + entry
         self.assertEqual(parse_mmkv_value(blob, key.decode()), "anonymous-1")
+
+    def test_parses_android_sensor_identity(self):
+        identity = json.dumps({"$identity_android_id": "device-1"}).encode()
+        encoded = base64.b64encode(identity).decode()
+        xml = (
+            "<map>"
+            '<string name="events_distinct_id">SPUK_device-1</string>'
+            f'<string name="user_ids">Base64:{encoded}</string>'
+            "</map>"
+        ).encode()
+        parsed = parse_android_sensor_identity(xml)
+        self.assertEqual(parsed["deviceId"], "device-1")
+        self.assertEqual(parsed["distinctId"], "SPUK_device-1")
 
 
 if __name__ == "__main__":

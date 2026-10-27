@@ -549,6 +549,10 @@ watch(activeTab, (tab) => {
   if (tab === 'device') loadCurrentDeviceContext()
 })
 
+watch(platform, () => {
+  if (activeTab.value === 'device') loadCurrentDeviceContext()
+})
+
 watch(buildConfiguration, () => {
   if (activeTab.value === 'device') loadCurrentDeviceContext(true)
 })
