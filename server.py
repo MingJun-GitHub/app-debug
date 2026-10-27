@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-Xcode 26.3 本地控制台
+App Debug 本地服务
 
-只用标准库。启动后在浏览器打开 http://127.0.0.1:8787
+统一托管 Nuxt 前端，并为 iOS / Android 提供彼此隔离的构建、设备和日志 API。
 仅监听本机回环地址，不对外网开放。
 """
 
@@ -22,7 +22,6 @@ from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
 
 BASE_DIR = Path(__file__).resolve().parent
-RUNNER = BASE_DIR / "run163.sh"
 DIST_DIR = BASE_DIR / ".output" / "public"
 INDEX = DIST_DIR / "index.html"
 
@@ -30,23 +29,40 @@ HOST = "127.0.0.1"
 PORT = int(os.environ.get("PORT", "8787"))
 
 ALLOWED_ACTIONS = {"all", "build", "install", "launch", "log", "logs", "doctor"}
+PLATFORMS = {
+    "ios": {
+        "runner": BASE_DIR / "run163.sh",
+        "project": Path("/Users/mingjun/Desktop/app/ios"),
+        "log": Path("/Users/mingjun/Desktop/app/ios/log/decoded.log"),
+        "name": "BloomchicStore",
+    },
+    "android": {
+        "runner": BASE_DIR / "runandroid.sh",
+        "project": Path("/Users/mingjun/Desktop/app/android"),
+        "log": Path("/Users/mingjun/Desktop/app/android/log/decoded.log"),
+        "name": "Bloomchic Android",
+    },
+}
 
 _jobs = {}
 _jobs_lock = threading.Lock()
 
-# 当前选中的设备（网页切换后写入，构建时注入环境变量）
+# iOS 与 Android 分别保存设备选择，避免切换平台时互相覆盖。
 _device_lock = threading.Lock()
-_selected_device = {"udid": "", "name": ""}
-
-LOG_FILE = Path("/Users/mingjun/Desktop/app/ios/log/decoded.log")
+_selected_devices = {
+    "ios": {"udid": "", "name": ""},
+    "android": {"udid": "", "name": ""},
+}
 
 
 class Job:
-    def __init__(self, action, configuration=""):
+    def __init__(self, platform, action, configuration=""):
         self.id = uuid.uuid4().hex[:12]
+        self.platform = platform
         self.action = action
         self.configuration = configuration
         self.lines = []
+        self.line_base = 0
         self.done = False
         self.exit_code = None
         self.started = time.time()
@@ -59,33 +75,44 @@ class Job:
         for line in text.splitlines():
             self.lines.append(line)
         if len(self.lines) > 5000:
+            removed = len(self.lines) - 3000
             self.lines = self.lines[-3000:]
+            self.line_base += removed
 
     def snapshot(self, offset=0):
+        truncated = offset < self.line_base
+        local_offset = max(0, offset - self.line_base)
         return {
             "id": self.id,
+            "platform": self.platform,
             "action": self.action,
             "done": self.done,
             "cancelled": self.cancel_requested.is_set(),
             "exitCode": self.exit_code,
             "running": self.proc is not None and self.proc.poll() is None,
             "elapsed": round((self.finished or time.time()) - self.started, 1),
-            "total": len(self.lines),
+            "total": self.line_base + len(self.lines),
             "offset": offset,
-            "lines": self.lines[offset:],
+            "truncated": truncated,
+            "lines": self.lines[local_offset:],
         }
 
 
 def _run_job(job):
-    cmd = ["/bin/zsh", str(RUNNER), job.action]
+    runtime = PLATFORMS[job.platform]
+    cmd = ["/bin/zsh", str(runtime["runner"]), job.action]
     env = dict(os.environ)
     env["TERM"] = "dumb"
     if job.configuration:
         env["CONFIGURATION"] = job.configuration
     with _device_lock:
-        if _selected_device["udid"]:
-            env["DEVICE_UDID"] = _selected_device["udid"]
-            env["DEVICE_NAME"] = _selected_device["name"]
+        selected = dict(_selected_devices[job.platform])
+    if selected["udid"]:
+        if job.platform == "ios":
+            env["DEVICE_UDID"] = selected["udid"]
+            env["DEVICE_NAME"] = selected["name"]
+        else:
+            env["DEVICE_SERIAL"] = selected["udid"]
     try:
         proc = subprocess.Popen(
             cmd,
@@ -93,6 +120,8 @@ def _run_job(job):
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             bufsize=1,
             env=env,
             start_new_session=True,
@@ -109,6 +138,12 @@ def _run_job(job):
         job.append(f"[runner] 启动失败: {exc}")
         job.exit_code = -1
     finally:
+        if job.proc is not None and job.proc.poll() is None:
+            _signal_job(job, signal.SIGTERM)
+            try:
+                job.proc.wait(timeout=3)
+            except subprocess.TimeoutExpired:
+                _signal_job(job, signal.SIGKILL)
         job.done = True
         job.finished = time.time()
         job.completed.set()
@@ -139,8 +174,8 @@ def stop_job(job):
     return True
 
 
-def start_job(action, configuration=""):
-    job = Job(action, configuration)
+def start_job(platform, action, configuration=""):
+    job = Job(platform, action, configuration)
     with _jobs_lock:
         _jobs[job.id] = job
         if len(_jobs) > 20:
@@ -151,10 +186,10 @@ def start_job(action, configuration=""):
     return job
 
 
-def latest_sdk():
-    """读取最近产物里的 SDK 名，用于页面展示。"""
+def latest_ios_sdk():
+    """读取最新 iOS 产物里的 SDK 名。"""
     app = (
-        Path("/Users/mingjun/Desktop/app/ios")
+        PLATFORMS["ios"]["project"]
         / ".derivedData/Build/Products/Debug-iphoneos/BloomchicStore.app/Info.plist"
     )
     if not app.exists():
@@ -169,58 +204,156 @@ def latest_sdk():
         return None
 
 
-def device_info():
+def list_ios_devices():
     try:
         out = subprocess.run(
             ["xcrun", "xcdevice", "list"],
             capture_output=True, text=True, timeout=20,
         )
         items = json.loads(out.stdout)
-        fallback = None
+        devices = []
         for item in items:
-            if item.get("simulator"):
-                continue
             if item.get("platform") != "com.apple.platform.iphoneos":
                 continue
-            state = "connected" if item.get("available") else "unavailable"
-            info = {
+            devices.append({
                 "name": item.get("name", ""),
                 "udid": item.get("identifier", ""),
-                "state": state,
+                "model": item.get("modelName", ""),
+                "state": "connected" if item.get("available") else "unavailable",
                 "interface": item.get("interface", ""),
                 "os": item.get("operatingSystemVersion", ""),
-            }
-            if item.get("available"):
-                return info
-            fallback = fallback or info
-        if fallback:
-            return fallback
-    except Exception:  # noqa: BLE001
-        pass
-    return None
-
-
-def list_devices():
-    """通过 run163.sh devices 取结构化设备列表（含模拟器）。"""
-    try:
-        out = subprocess.run(
-            ["/bin/zsh", str(RUNNER), "devices"],
-            capture_output=True, text=True, timeout=90, cwd=str(BASE_DIR),
-        )
-        raw = out.stdout.strip()
-        if not raw:
-            return []
-        return json.loads(raw.split("\n")[-1])
+                "simulator": bool(item.get("simulator")),
+                "available": bool(item.get("available")),
+            })
+        devices.sort(key=lambda item: (item["simulator"], not item["available"], item["name"]))
+        return devices
     except Exception:  # noqa: BLE001
         return []
 
 
-def search_log(keyword, limit=200, use_regex=False):
+def list_android_devices():
+    """枚举已连接且已授权的 adb 设备。"""
+    try:
+        out = subprocess.run(
+            ["adb", "devices", "-l"],
+            capture_output=True, text=True, timeout=15,
+        )
+        devices = []
+        for line in out.stdout.splitlines()[1:]:
+            line = line.strip()
+            if not line or line.startswith("*"):
+                continue
+            parts = line.split()
+            if len(parts) < 2:
+                continue
+            serial, state = parts[0], parts[1]
+            attrs = {}
+            for part in parts[2:]:
+                if ":" in part:
+                    key, value = part.split(":", 1)
+                    attrs[key] = value.replace("_", " ")
+            model = attrs.get("model") or attrs.get("product") or serial
+            version = ""
+            if state == "device":
+                try:
+                    version = subprocess.run(
+                        ["adb", "-s", serial, "shell", "getprop", "ro.build.version.release"],
+                        capture_output=True, text=True, timeout=5,
+                    ).stdout.strip()
+                except Exception:  # noqa: BLE001
+                    pass
+            devices.append({
+                "name": model,
+                "udid": serial,
+                "model": model,
+                "state": "connected" if state == "device" else state,
+                "interface": "emulator" if serial.startswith("emulator-") else "adb",
+                "os": version,
+                "simulator": serial.startswith("emulator-"),
+                "available": state == "device",
+            })
+        devices.sort(key=lambda item: (item["simulator"], not item["available"], item["name"]))
+        return devices
+    except Exception:  # noqa: BLE001
+        return []
+
+
+def list_devices(platform):
+    return list_ios_devices() if platform == "ios" else list_android_devices()
+
+
+def select_device(devices, platform):
+    with _device_lock:
+        selected = dict(_selected_devices[platform])
+    if selected["udid"]:
+        match = next((item for item in devices if item["udid"] == selected["udid"]), None)
+        if match:
+            return match
+    return next((item for item in devices if item["available"]), None) or (devices[0] if devices else None)
+
+
+def latest_android_artifact(configuration="Debug"):
+    variant = "release" if configuration == "Release" else "debug"
+    output_dir = PLATFORMS["android"]["project"] / "app/build/outputs/apk" / variant
+    if not output_dir.exists():
+        return None
+    files = sorted(output_dir.glob("*.apk"), key=lambda item: item.stat().st_mtime, reverse=True)
+    if not files:
+        return None
+    version = ""
+    metadata = output_dir / "output-metadata.json"
+    if metadata.exists():
+        try:
+            data = json.loads(metadata.read_text(encoding="utf-8"))
+            elements = data.get("elements") or []
+            if elements:
+                version = str(elements[0].get("versionName") or "")
+        except Exception:  # noqa: BLE001
+            pass
+    return {
+        "name": files[0].name,
+        "path": str(files[0]),
+        "version": version,
+    }
+
+
+def platform_status(platform):
+    devices = list_devices(platform)
+    device = select_device(devices, platform)
+    with _device_lock:
+        selected = dict(_selected_devices[platform])
+    if platform == "ios":
+        sdk = latest_ios_sdk()
+        artifact = None
+        app = (
+            PLATFORMS["ios"]["project"]
+            / ".derivedData/Build/Products/Debug-iphoneos/BloomchicStore.app"
+        )
+        if app.exists():
+            artifact = {"name": app.name, "path": str(app)}
+    else:
+        sdk = None
+        artifact = latest_android_artifact()
+        if artifact:
+            sdk = f"Android {artifact['version']}".strip()
+    return {
+        "platform": platform,
+        "project": str(PLATFORMS[platform]["project"]),
+        "projectName": PLATFORMS[platform]["name"],
+        "device": device,
+        "sdk": sdk,
+        "artifact": artifact,
+        "selected": selected,
+    }
+
+
+def search_log(platform, keyword, limit=200, use_regex=False):
     """在已解码日志中检索，返回匹配行。"""
-    if not LOG_FILE.exists():
+    log_file = PLATFORMS[platform]["log"]
+    if not log_file.exists():
         return {
             "ok": False,
-            "error": "log/decoded.log 不存在，请先点「拉取 App 日志」",
+            "error": f"{platform} log/decoded.log 不存在，请先点「拉取日志」",
             "lines": [],
             "total": 0,
         }
@@ -230,7 +363,7 @@ def search_log(keyword, limit=200, use_regex=False):
         else:
             pattern = None
         hits = []
-        with LOG_FILE.open("r", encoding="utf-8", errors="replace") as fh:
+        with log_file.open("r", encoding="utf-8", errors="replace") as fh:
             for idx, line in enumerate(fh, 1):
                 line = line.rstrip("\n")
                 matched = bool(pattern.search(line)) if pattern else (keyword in line)
@@ -243,8 +376,8 @@ def search_log(keyword, limit=200, use_regex=False):
             "ok": True,
             "lines": hits[-limit:],
             "total": total,
-            "file": str(LOG_FILE),
-            "size": LOG_FILE.stat().st_size,
+            "file": str(log_file),
+            "size": log_file.stat().st_size,
         }
     except re.error as exc:
         return {"ok": False, "error": f"正则错误: {exc}", "lines": [], "total": 0}
@@ -309,21 +442,26 @@ class Handler(BaseHTTPRequestHandler):
         if not path.startswith("/api/"):
             return self._serve_static(path)
 
-        if path == "/api/status":
-            with _device_lock:
-                selected = dict(_selected_device)
+        parts = [part for part in path.split("/") if part]
+        if len(parts) >= 3 and parts[1] in PLATFORMS:
+            platform = parts[1]
+            route = parts[2:]
+        else:
+            platform = "ios"
+            route = parts[1:]
+
+        if route == ["status"]:
+            return self._send(
+                200,
+                json.dumps(platform_status(platform), ensure_ascii=False),
+            )
+
+        if route == ["devices"]:
             return self._send(200, json.dumps({
-                "device": device_info(),
-                "sdk": latest_sdk(),
-                "selected": selected,
+                "devices": list_devices(platform),
             }, ensure_ascii=False))
 
-        if path == "/api/devices":
-            return self._send(200, json.dumps({
-                "devices": list_devices(),
-            }, ensure_ascii=False))
-
-        if path == "/api/log/search":
+        if route == ["log", "search"]:
             params = parse_qs(urlparse(self.path).query, keep_blank_values=True)
             keyword = (params.get("q") or [""])[0]
             if not keyword:
@@ -334,30 +472,28 @@ class Handler(BaseHTTPRequestHandler):
                 limit = 200
             use_regex = (params.get("regex") or ["0"])[0] == "1"
             return self._send(200, json.dumps(
-                search_log(keyword, limit, use_regex), ensure_ascii=False
+                search_log(platform, keyword, limit, use_regex), ensure_ascii=False
             ))
 
-        if path == "/api/log/meta":
-            exists = LOG_FILE.exists()
+        if route == ["log", "meta"]:
+            log_file = PLATFORMS[platform]["log"]
+            exists = log_file.exists()
             return self._send(200, json.dumps({
                 "exists": exists,
-                "file": str(LOG_FILE),
-                "size": LOG_FILE.stat().st_size if exists else 0,
-                "mtime": LOG_FILE.stat().st_mtime if exists else None,
+                "file": str(log_file),
+                "size": log_file.stat().st_size if exists else 0,
+                "mtime": log_file.stat().st_mtime if exists else None,
             }, ensure_ascii=False))
 
-        if path.startswith("/api/job/"):
-            job_id = path.rsplit("/", 1)[-1]
-            query = self.path.split("?", 1)[1] if "?" in self.path else ""
-            offset = 0
-            for part in query.split("&"):
-                if part.startswith("offset="):
-                    try:
-                        offset = int(part.split("=", 1)[1])
-                    except ValueError:
-                        offset = 0
+        if len(route) == 2 and route[0] == "job":
+            job_id = route[1]
+            params = parse_qs(urlparse(self.path).query)
+            try:
+                offset = int((params.get("offset") or ["0"])[0])
+            except ValueError:
+                offset = 0
             job = _jobs.get(job_id)
-            if not job:
+            if not job or job.platform != platform:
                 return self._send(404, json.dumps({"error": "job not found"}))
             return self._send(200, json.dumps(job.snapshot(offset)))
 
@@ -372,7 +508,15 @@ class Handler(BaseHTTPRequestHandler):
         except json.JSONDecodeError:
             return self._send(400, json.dumps({"error": "invalid json"}))
 
-        if path == "/api/run":
+        parts = [part for part in path.split("/") if part]
+        if len(parts) >= 3 and parts[1] in PLATFORMS:
+            platform = parts[1]
+            route = parts[2:]
+        else:
+            platform = "ios"
+            route = parts[1:]
+
+        if route == ["run"]:
             action = str(payload.get("action", "all"))
             configuration = str(payload.get("configuration", "")).strip()
             if action not in ALLOWED_ACTIONS:
@@ -381,27 +525,31 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(400, json.dumps({"error": "configuration not allowed"}))
             with _jobs_lock:
                 for job in _jobs.values():
-                    if not job.done and job.action in ("all", "build"):
+                    if (
+                        job.platform == platform
+                        and not job.done
+                        and job.action in ("all", "build")
+                    ):
                         return self._send(409, json.dumps({
                             "error": "已有构建在进行中",
                             "jobId": job.id,
                         }))
-            job = start_job(action, configuration)
+            job = start_job(platform, action, configuration)
             return self._send(200, json.dumps({"jobId": job.id}))
 
-        if path == "/api/stop":
+        if route == ["stop"]:
             job_id = str(payload.get("jobId", ""))
             job = _jobs.get(job_id)
-            if job and stop_job(job):
+            if job and job.platform == platform and stop_job(job):
                 return self._send(200, json.dumps({"stopped": True}))
             return self._send(200, json.dumps({"stopped": False}))
 
-        if path == "/api/device/select":
+        if route == ["device", "select"]:
             udid = str(payload.get("udid", "")).strip()
             name = str(payload.get("name", "")).strip()
             with _device_lock:
-                _selected_device["udid"] = udid
-                _selected_device["name"] = name
+                _selected_devices[platform]["udid"] = udid
+                _selected_devices[platform]["name"] = name
             return self._send(200, json.dumps({
                 "selected": {"udid": udid, "name": name},
             }, ensure_ascii=False))
@@ -415,10 +563,12 @@ def main():
     parser.add_argument("--no-browser", action="store_true")
     args = parser.parse_args()
 
-    if not RUNNER.exists():
-        raise SystemExit(f"找不到 {RUNNER}")
-    if not os.access(RUNNER, os.X_OK):
-        os.chmod(RUNNER, 0o755)
+    for runtime in PLATFORMS.values():
+        runner = runtime["runner"]
+        if not runner.exists():
+            raise SystemExit(f"找不到 {runner}")
+        if not os.access(runner, os.X_OK):
+            os.chmod(runner, 0o755)
 
     server = ThreadingHTTPServer((HOST, args.port), Handler)
     url = f"http://{HOST}:{args.port}"

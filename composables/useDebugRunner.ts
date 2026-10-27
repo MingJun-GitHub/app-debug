@@ -18,8 +18,15 @@ export interface Device {
 }
 
 export interface DebugStatus {
+  platform?: 'ios' | 'android'
+  project?: string
+  projectName?: string
   device?: Device | null
   sdk?: string | null
+  artifact?: {
+    name: string
+    path: string
+  } | null
   selected?: {
     udid: string
     name: string
@@ -33,6 +40,7 @@ interface JobSnapshot {
   exitCode: number | null
   elapsed: number
   total: number
+  truncated?: boolean
   lines: string[]
 }
 
@@ -44,10 +52,10 @@ interface LogResult {
 }
 
 function classify(line: string): EventKind {
-  if (/^\s*✗/.test(line) || /\berror:|\*\* BUILD FAILED \*\*|fatal error|exception|failed/i.test(line)) return 'error'
-  if (/^\s*✓/.test(line) || /\*\* BUILD SUCCEEDED \*\*|success|完成/i.test(line)) return 'success'
-  if (/^\s*!/.test(line) || /\bwarning:|warn/i.test(line)) return 'warning'
-  if (/^==>/.test(line)) return 'command'
+  if (/^\s*✗/.test(line) || /\berror:|\*\* BUILD FAILED \*\*|fatal error|exception|failed|FAILURE:|What went wrong|Execution failed|Caused by:/i.test(line) || /\s[EF]\s{2,}/.test(line)) return 'error'
+  if (/^\s*✓/.test(line) || /\*\* BUILD SUCCEEDED \*\*|BUILD SUCCESSFUL|success|完成|Installed on/i.test(line)) return 'success'
+  if (/^\s*!/.test(line) || /^\s*w:|warning:|warn/i.test(line) || /\sW\s{2,}/.test(line)) return 'warning'
+  if (/^(==>|> Task)/.test(line)) return 'command'
   if (/^\s{4}/.test(line)) return 'dim'
   return 'info'
 }
@@ -63,7 +71,8 @@ async function requestJSON<T>(url: string, options?: RequestInit): Promise<T> {
   return data as T
 }
 
-export function useDebugRunner() {
+export function useDebugRunner(platform: 'ios' | 'android') {
+  const apiBase = `/api/${platform}`
   const status = ref<DebugStatus | null>(null)
   const devices = ref<Device[]>([])
   const events = ref<DebugEvent[]>([])
@@ -77,7 +86,10 @@ export function useDebugRunner() {
   let eventSerial = 0
   let jobOffset = 0
 
-  const physicalDevices = computed(() => devices.value.filter(device => !device.simulator))
+  const physicalDevices = computed(() => devices.value.filter((device) => {
+    if (platform === 'android') return true
+    return !device.simulator
+  }))
   const connectedDevice = computed(() => status.value?.device || null)
   const sdk = computed(() => status.value?.sdk || null)
   const errors = computed(() => events.value.filter(event => event.kind === 'error'))
@@ -112,7 +124,7 @@ export function useDebugRunner() {
 
   async function refreshStatus() {
     try {
-      status.value = await requestJSON<DebugStatus>('/api/status')
+      status.value = await requestJSON<DebugStatus>(`${apiBase}/status`)
     } catch {
       status.value = null
     }
@@ -120,15 +132,15 @@ export function useDebugRunner() {
 
   async function loadDevices() {
     try {
-      const data = await requestJSON<{ devices: Device[] }>('/api/devices')
-      devices.value = data.devices.filter(device => !device.simulator)
+      const data = await requestJSON<{ devices: Device[] }>(`${apiBase}/devices`)
+      devices.value = data.devices
     } catch {
       devices.value = []
     }
   }
 
   async function selectDevice(device: Device) {
-    await requestJSON('/api/device/select', {
+    await requestJSON(`${apiBase}/device/select`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ udid: device.udid, name: device.name })
@@ -139,8 +151,12 @@ export function useDebugRunner() {
     if (!activeJob.value) return
     try {
       const job = await requestJSON<JobSnapshot>(
-        `/api/job/${activeJob.value.id}?offset=${jobOffset}`
+        `${apiBase}/job/${activeJob.value.id}?offset=${jobOffset}`
       )
+      if (job.truncated) {
+        events.value = []
+        jobOffset = 0
+      }
       appendLines(job.lines || [])
       jobOffset = job.total
       elapsed.value = job.elapsed
@@ -168,7 +184,7 @@ export function useDebugRunner() {
     busy.value = true
     jobDone.value = false
     try {
-      const data = await requestJSON<{ jobId: string }>('/api/run', {
+      const data = await requestJSON<{ jobId: string }>(`${apiBase}/run`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ action, configuration })
@@ -186,7 +202,7 @@ export function useDebugRunner() {
   async function stopJob() {
     if (!activeJob.value) return
     try {
-      await requestJSON('/api/stop', {
+      await requestJSON(`${apiBase}/stop`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ jobId: activeJob.value.id })
@@ -202,7 +218,7 @@ export function useDebugRunner() {
     const params = new URLSearchParams({ q: query, limit: '300' })
     if (regex) params.set('regex', '1')
     try {
-      const result = await requestJSON<LogResult>(`/api/log/search?${params}`)
+      const result = await requestJSON<LogResult>(`${apiBase}/log/search?${params}`)
       logs.value = result.lines || []
       logMeta.value = result.ok
         ? `${result.total} 条匹配 · 显示最近 ${result.lines.length} 条`
@@ -215,6 +231,7 @@ export function useDebugRunner() {
 
   return {
     status,
+    platform,
     devices,
     physicalDevices,
     connectedDevice,

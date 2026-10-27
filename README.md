@@ -1,6 +1,6 @@
 # App Debug
 
-前端开发者使用的本地 iOS / Android 调试工作台。当前已经接通 iOS 构建、安装、启动、设备管理和日志能力，Android 保留了平台入口与扩展位置。
+前端开发者使用的本地 iOS / Android 调试工作台。iOS 与 Android 使用彼此独立的项目、设备、任务和日志状态。
 
 ## 技术栈
 
@@ -9,6 +9,7 @@
 - Vue 3
 - Python 标准库本地 API
 - Xcode 26.3 / `xcrun`
+- Android SDK / Gradle / `adb`
 
 ## 开发
 
@@ -52,6 +53,12 @@ python3 server.py
 - 日志：搜索设备 `decoded.log`
 - 运行配置：设备选择、Debug/Release、构建、安装、启动和拉日志
 
+平台状态完全隔离：
+
+- iOS 使用 `~/Desktop/app/ios`、`run163.sh` 和 `xcrun`
+- Android 使用 `~/Desktop/app/android`、`runandroid.sh` 和 `adb`
+- 切换平台不会清空另一平台的设备、日志或运行状态
+
 ## 运行脚本
 
 ```sh
@@ -75,14 +82,24 @@ DEVICE_UDID=00008150-XXXXXXXXXXXX \
 
 支持 `PROJECT_DIR`、`XCODE_APP`、`WORKSPACE`、`SCHEME`、`CONFIGURATION`、`DERIVED_DATA`、`BUNDLE_ID`、`DEVICE_UDID`。
 
-## Android 扩展
+## Android 运行脚本
 
-页面已经保留 Android 平台入口。后续可以在 `composables/useDebugRunner.ts` 外增加平台适配器，把同一套事件结构映射到：
+```sh
+./runandroid.sh            # 构建 + 安装 + 启动
+./runandroid.sh build      # 只构建
+./runandroid.sh install    # 只安装
+./runandroid.sh launch     # 只启动
+./runandroid.sh log        # 启动并跟随 logcat
+./runandroid.sh logs       # 拉取并解码 xlog
+./runandroid.sh doctor     # 环境检查
+```
 
-- `./gradlew assembleDebug`
-- `adb install -r`
-- `adb shell am start`
-- `adb logcat`
+默认项目目录为 `~/Desktop/app/android`，包名为 `com.bloomchic.app`。可通过 `PROJECT_DIR`、`CONFIGURATION`、`BUNDLE_ID`、`DEVICE_SERIAL` 覆盖。
+
+iOS 和 Android 各自使用独立 API 前缀：
+
+- `/api/ios/*`
+- `/api/android/*`
 
 ## 服务安全
 

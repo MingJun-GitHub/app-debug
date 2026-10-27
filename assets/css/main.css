@@ -322,7 +322,7 @@ kbd {
 
 .debug-tabs {
   flex: 0 0 auto;
-  padding: 10px 0 0;
+  padding: 6px 0 0;
 }
 
 .debug-tabs [role="tablist"] {
@@ -342,7 +342,7 @@ kbd {
   min-height: 0;
   flex: 1;
   flex-direction: column;
-  padding-top: 14px;
+  padding-top: 4px;
 }
 
 .pane-toolbar {

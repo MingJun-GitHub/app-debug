@@ -1,46 +1,74 @@
 <script setup lang="ts">
-import type { DebugEvent, Device } from '~/composables/useDebugRunner'
+import type { DebugEvent } from '~/composables/useDebugRunner'
 
+type PlatformKey = 'ios' | 'android'
 type TabKey = 'run' | 'issues' | 'logs'
 type SeverityFilter = 'all' | 'error' | 'warning' | 'network'
 
-const {
-  status,
-  physicalDevices,
-  connectedDevice,
-  sdk,
-  events,
-  errors,
-  warnings,
-  callStack,
-  logs,
-  logMeta,
-  activeJob,
-  jobDone,
-  jobResult,
-  elapsed,
-  busy,
-  clearEvents,
-  refreshStatus,
-  loadDevices,
-  selectDevice,
-  runAction,
-  stopJob,
-  searchLogs
-} = useDebugRunner()
+const runners = {
+  ios: useDebugRunner('ios'),
+  android: useDebugRunner('android')
+}
 
-const platform = ref<'ios' | 'android'>('ios')
-const activeTabIndex = ref(0)
-const selectedDevice = ref<any>(null)
-const buildConfiguration = ref('Debug')
-const eventQuery = ref('')
-const severity = ref<SeverityFilter>('all')
-const logQuery = ref('')
-const logRegex = ref(false)
+const platform = ref<PlatformKey>('ios')
+const activeTabIndexes = reactive<Record<PlatformKey, number>>({ ios: 0, android: 0 })
+const selectedDevices = reactive<Record<PlatformKey, any>>({ ios: null, android: null })
+const buildConfigurations = reactive<Record<PlatformKey, string>>({ ios: 'Debug', android: 'Debug' })
+const eventQueries = reactive<Record<PlatformKey, string>>({ ios: '', android: '' })
+const severities = reactive<Record<PlatformKey, SeverityFilter>>({ ios: 'all', android: 'all' })
+const logQueries = reactive<Record<PlatformKey, string>>({ ios: '', android: '' })
+const logRegex = reactive<Record<PlatformKey, boolean>>({ ios: false, android: false })
 const copied = ref(false)
 const eventPane = ref<HTMLElement | null>(null)
 let statusTimer: ReturnType<typeof setInterval> | undefined
 let deviceTimer: ReturnType<typeof setInterval> | undefined
+
+const runner = computed(() => runners[platform.value])
+const status = computed(() => runner.value.status.value)
+const physicalDevices = computed(() => runner.value.physicalDevices.value)
+const connectedDevice = computed(() => runner.value.connectedDevice.value)
+const sdk = computed(() => runner.value.sdk.value)
+const events = computed(() => runner.value.events.value)
+const errors = computed(() => runner.value.errors.value)
+const warnings = computed(() => runner.value.warnings.value)
+const callStack = computed(() => runner.value.callStack.value)
+const logs = computed(() => runner.value.logs.value)
+const logMeta = computed(() => runner.value.logMeta.value)
+const activeJob = computed(() => runner.value.activeJob.value)
+const jobDone = computed(() => runner.value.jobDone.value)
+const jobResult = computed(() => runner.value.jobResult.value)
+const elapsed = computed(() => runner.value.elapsed.value)
+const busy = computed(() => runner.value.busy.value)
+
+const selectedDevice = computed({
+  get: () => selectedDevices[platform.value],
+  set: (value) => { selectedDevices[platform.value] = value }
+})
+
+const buildConfiguration = computed({
+  get: () => buildConfigurations[platform.value],
+  set: (value) => { buildConfigurations[platform.value] = value }
+})
+
+const eventQuery = computed({
+  get: () => eventQueries[platform.value],
+  set: (value) => { eventQueries[platform.value] = value }
+})
+
+const severity = computed({
+  get: () => severities[platform.value],
+  set: (value) => { severities[platform.value] = value }
+})
+
+const logQuery = computed({
+  get: () => logQueries[platform.value],
+  set: (value) => { logQueries[platform.value] = value }
+})
+
+const currentLogRegex = computed({
+  get: () => logRegex[platform.value],
+  set: (value) => { logRegex[platform.value] = value }
+})
 
 const tabs = [
   { key: 'run', label: '运行', icon: 'i-heroicons-play' },
@@ -48,10 +76,25 @@ const tabs = [
   { key: 'logs', label: '日志', icon: 'i-heroicons-document-text' }
 ]
 
+const activeTabIndex = computed({
+  get: () => activeTabIndexes[platform.value],
+  set: (value) => { activeTabIndexes[platform.value] = value }
+})
+
 const activeTab = computed<TabKey>(() => (tabs[activeTabIndex.value]?.key as TabKey) || 'run')
 
+function deviceOptionsFor(key: PlatformKey) {
+  return runners[key].physicalDevices.value.map(device => ({
+    label: `${device.name} · ${key === 'ios' ? 'iOS' : 'Android'} ${device.os || '?'}`,
+    icon: key === 'ios' ? 'i-heroicons-device-phone-mobile' : 'i-heroicons-device-tablet',
+    udid: device.udid,
+    name: device.name,
+    disabled: !device.available
+  }))
+}
+
 const deviceOptions = computed(() => physicalDevices.value.map(device => ({
-  label: `${device.name} · iOS ${device.os || '?'}`,
+  label: `${device.name} · ${platform.value === 'ios' ? 'iOS' : 'Android'} ${device.os || '?'}`,
   icon: 'i-heroicons-device-phone-mobile',
   udid: device.udid,
   name: device.name,
@@ -68,7 +111,8 @@ const severityOptions: Array<{ key: SeverityFilter, label: string }> = [
 ]
 
 const issueCount = computed(() => errors.value.length)
-const warningCount = computed(() => warnings.value.length)
+const platformName = computed(() => platform.value === 'ios' ? 'iOS' : 'Android')
+const projectName = computed(() => status.value?.projectName || (platform.value === 'ios' ? 'BloomchicStore' : 'Bloomchic Android'))
 
 const filteredEvents = computed(() => {
   const query = eventQuery.value.trim().toLowerCase()
@@ -100,29 +144,42 @@ const runDotClass = computed(() => {
 const firstError = computed(() => errors.value.at(-1)?.text || '')
 const latestEvents = computed(() => events.value.slice(-80))
 
-async function initialize() {
-  await refreshStatus()
-  await loadDevices()
-  const preferred = connectedDevice.value
-    || physicalDevices.value.find(device => device.available)
-    || physicalDevices.value[0]
+async function initializePlatform(key: PlatformKey) {
+  const current = runners[key]
+  await current.refreshStatus()
+  await current.loadDevices()
+  const preferred = current.connectedDevice.value
+    || current.physicalDevices.value.find(device => device.available)
+    || current.physicalDevices.value[0]
   if (preferred) {
-    selectedDevice.value = deviceOptions.value.find(option => option.udid === preferred.udid) || null
-    await selectDevice(preferred).catch(() => {})
+    selectedDevices[key] = deviceOptionsFor(key).find(option => option.udid === preferred.udid) || null
+    await current.selectDevice(preferred).catch(() => {})
   }
-  statusTimer = setInterval(refreshStatus, 5000)
-  deviceTimer = setInterval(loadDevices, 30000)
+}
+
+async function refreshAllStatus() {
+  await Promise.all(Object.values(runners).map(current => current.refreshStatus()))
+}
+
+async function loadAllDevices() {
+  await Promise.all(Object.values(runners).map(current => current.loadDevices()))
+}
+
+async function initialize() {
+  await Promise.all([initializePlatform('ios'), initializePlatform('android')])
+  statusTimer = setInterval(refreshAllStatus, 5000)
+  deviceTimer = setInterval(loadAllDevices, 30000)
 }
 
 async function handleDeviceChange(value: any) {
   if (!value?.udid) return
   const device = physicalDevices.value.find(item => item.udid === value.udid)
-  if (device?.available) await selectDevice(device).catch(() => {})
+  if (device?.available) await runner.value.selectDevice(device).catch(() => {})
 }
 
 async function handleRun(action: string) {
   showTab('run')
-  await runAction(action, buildConfiguration.value)
+  await runner.value.runAction(action, buildConfiguration.value)
   await nextTick()
   if (eventPane.value) eventPane.value.scrollTop = eventPane.value.scrollHeight
 }
@@ -142,7 +199,19 @@ function eventClass(event: DebugEvent) {
 
 function showTab(key: TabKey) {
   const index = tabs.findIndex(tab => tab.key === key)
-  activeTabIndex.value = index >= 0 ? index : 0
+  activeTabIndexes[platform.value] = index >= 0 ? index : 0
+}
+
+function clearCurrentEvents() {
+  runner.value.clearEvents()
+}
+
+function stopCurrentJob() {
+  runner.value.stopJob()
+}
+
+function searchCurrentLogs() {
+  runner.value.searchLogs(logQueries[platform.value], logRegex[platform.value])
 }
 
 function handleShortcut(event: KeyboardEvent) {
@@ -160,10 +229,10 @@ function handleShortcut(event: KeyboardEvent) {
     nextTick(() => document.querySelector<HTMLInputElement>('#event-filter')?.focus())
   } else if (key === 'k') {
     event.preventDefault()
-    clearEvents()
+    clearCurrentEvents()
   } else if (key === '.') {
     event.preventDefault()
-    stopJob()
+    stopCurrentJob()
   }
 }
 
@@ -209,13 +278,12 @@ onBeforeUnmount(() => {
           >
             <AndroidMark class="platform-icon" />
             Android
-            <UBadge color="gray" variant="subtle" size="xs">Soon</UBadge>
           </UButton>
         </div>
 
         <div class="context-bar">
           <UButton color="gray" variant="soft" icon="i-heroicons-cube">
-            BloomchicStore
+            {{ projectName }}
           </UButton>
           <UBadge :color="buildConfiguration === 'Debug' ? 'amber' : 'green'" variant="subtle">
             {{ buildConfiguration }}
@@ -236,7 +304,7 @@ onBeforeUnmount(() => {
           color="gray"
           variant="ghost"
           icon="i-heroicons-trash"
-          @click="clearEvents"
+          @click="clearCurrentEvents"
         >
           清空
         </UButton>
@@ -253,7 +321,7 @@ onBeforeUnmount(() => {
               :options="deviceOptions"
               option-attribute="label"
               placeholder="选择已连接设备"
-              icon="i-heroicons-device-phone-mobile"
+              :icon="platform === 'ios' ? 'i-heroicons-device-phone-mobile' : 'i-heroicons-device-tablet'"
               searchable
               searchable-placeholder="搜索设备"
               class="w-full"
@@ -261,7 +329,7 @@ onBeforeUnmount(() => {
             />
             <div class="field-hint">
               <span class="mini-dot" :class="{ online: connectedDevice?.available }" />
-              {{ connectedDevice?.name || '未检测到 iOS 真机' }}
+              {{ connectedDevice?.name || `未检测到 ${platformName} 设备` }}
             </div>
           </div>
 
@@ -343,7 +411,7 @@ onBeforeUnmount(() => {
             icon="i-heroicons-stop"
             block
             :disabled="!busy"
-            @click="stopJob"
+            @click="stopCurrentJob"
           >
             停止任务
           </UButton>
@@ -357,11 +425,11 @@ onBeforeUnmount(() => {
         <main class="main-panel">
           <div class="main-head">
             <div>
-              <h1>{{ platform === 'ios' ? 'iOS 调试台' : 'Android 调试台' }}</h1>
-              <p>{{ platform === 'ios' ? '构建、安装、启动和错误定位在一个工作流里完成。' : 'Android 适配入口已预留，后续接入 adb、Gradle 和 logcat。' }}</p>
+              <h1>{{ platformName }} 调试台</h1>
+              <p>构建、安装、启动、日志和错误定位在一个独立工作流里完成。</p>
             </div>
             <div class="top-spacer" />
-            <UBadge :color="sdk?.includes('26.') ? 'green' : 'gray'" variant="subtle">
+            <UBadge :color="sdk ? 'green' : 'gray'" variant="subtle">
               {{ sdk || 'SDK 未发现' }}
             </UBadge>
             <UBadge :color="connectedDevice?.available ? 'green' : 'red'" variant="subtle">
@@ -369,7 +437,7 @@ onBeforeUnmount(() => {
             </UBadge>
           </div>
 
-          <div v-if="platform === 'ios'" class="main-content">
+          <div class="main-content">
             <UTabs
               v-model="activeTabIndex"
               :items="tabs"
@@ -426,7 +494,7 @@ onBeforeUnmount(() => {
                 <div v-if="!events.length" class="empty-state">
                   <UIcon name="i-heroicons-command-line" class="empty-icon" />
                   <div>还没有运行记录</div>
-                  <p>点击「构建并启动」，日志会实时出现在这里。</p>
+                  <p>点击「构建并启动」，{{ platformName }} 日志会实时出现在这里。</p>
                 </div>
                 <div v-else-if="!filteredEvents.length" class="empty-state compact">
                   没有符合当前过滤条件的事件
@@ -542,14 +610,14 @@ onBeforeUnmount(() => {
                 <UInput
                   v-model="logQuery"
                   icon="i-heroicons-magnifying-glass"
-                  placeholder="搜索 decoded.log，例如 HttpLogging / error / request-id"
+                  :placeholder="`搜索 ${platformName} decoded.log，例如 HttpLogging / error / request-id`"
                   class="flex-1"
-                  @keydown.enter="searchLogs(logQuery, logRegex)"
+                  @keydown.enter="searchCurrentLogs"
                 />
-                <UCheckbox v-model="logRegex" label="正则" />
+                <UCheckbox v-model="currentLogRegex" label="正则" />
                 <UButton
                   icon="i-heroicons-magnifying-glass"
-                  @click="searchLogs(logQuery, logRegex)"
+                  @click="searchCurrentLogs"
                 >
                   搜索
                 </UButton>
@@ -565,20 +633,6 @@ onBeforeUnmount(() => {
               </div>
               <div class="log-meta">{{ logMeta }}</div>
             </section>
-          </div>
-
-          <div v-else class="platform-empty">
-            <AndroidMark class="platform-empty-icon" />
-            <h2>Android 适配入口</h2>
-            <p>当前工作台保留了平台切换和统一事件流。后续接入 Gradle、adb、logcat 后即可复用运行、错误和日志视图。</p>
-            <UButton
-              color="gray"
-              variant="soft"
-              icon="i-heroicons-arrow-left"
-              @click="platform = 'ios'"
-            >
-              返回 iOS
-            </UButton>
           </div>
         </main>
       </div>
