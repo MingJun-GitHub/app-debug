@@ -86,11 +86,11 @@ cmd_build() {
   fi
 
   env "${env_args[@]}" "$GRADLEW" "$TASK" --console=plain 2>&1 | /usr/bin/awk '
-    /^WARNING: D8: Unexpected error during rewriting/ { d8++; next }
-    /^WARNING: D8: An error occurred when parsing kotlin metadata/ { metadata++; next }
-    /^com\.android\.tools\.r8\./ { next }
-    /^[[:space:]]+at / { next }
+    /^WARNING: D8: Unexpected error during rewriting/ { d8++; skip = 1; next }
+    /^WARNING: D8: An error occurred when parsing kotlin metadata/ { metadata++; skip = 1; next }
+    skip && /^(com\.android\.tools\.r8\.|[[:space:]]*at )/ { next }
     {
+      skip = 0
       print
       fflush()
     }
@@ -141,17 +141,41 @@ cmd_log() {
   log "启动并跟随 logcat（Ctrl+C 退出日志）"
   print -r -- "────────────────────────────────────────────────────────"
   adb_device shell am force-stop "$BUNDLE_ID" >/dev/null 2>&1 || true
-  adb_device shell monkey \
+  local launch_output
+  launch_output=$(adb_device shell monkey \
     -p "$BUNDLE_ID" \
     -c android.intent.category.LAUNCHER \
-    1 >/dev/null
-  local pid
-  pid=$(adb_device shell pidof "$BUNDLE_ID" 2>/dev/null | /usr/bin/tr -d '\r')
-  if [[ -n "$pid" ]]; then
-    adb_device logcat -v threadtime --pid="$pid"
-  else
-    adb_device logcat -v threadtime
+    1 2>&1)
+  print -r -- "$launch_output"
+  if ! print -r -- "$launch_output" | /usr/bin/grep -q 'Events injected:'; then
+    fail "Android App 启动失败，未进入 logcat"
+    return 1
   fi
+
+  local pids=""
+  local attempt
+  for attempt in {1..12}; do
+    pids=$(adb_device shell pidof "$BUNDLE_ID" 2>/dev/null | /usr/bin/xargs)
+    [[ -n "$pids" ]] && break
+    sleep 0.5
+  done
+  if [[ -n "$pids" ]]; then
+    local pid_filter="${pids// /,}"
+    dim "应用 PID: $pids"
+    adb_device logcat -v threadtime --pid="$pid_filter"
+    return $?
+  fi
+
+  local uid
+  uid=$(adb_device shell dumpsys package "$BUNDLE_ID" 2>/dev/null \
+    | /usr/bin/awk -F= '/userId=/ { gsub(/[^0-9]/, "", $2); print $2; exit }')
+  if [[ -n "$uid" ]]; then
+    warn "未获取到 PID，按应用 UID $uid 过滤日志"
+    adb_device logcat -v threadtime --uid="$uid"
+    return $?
+  fi
+  fail "应用进程未启动，无法建立实时日志流"
+  return 1
 }
 
 cmd_logs() {
@@ -164,6 +188,7 @@ cmd_logs() {
 }
 
 cmd_doctor() {
+  local failures=0
   log "Android 环境检查"
   print -r -- "────────────────────────────────────────────────────────"
 
@@ -171,16 +196,28 @@ cmd_doctor() {
     ok "Java: $(java -version 2>&1 | head -1)"
   else
     fail "未找到 Java"
+    failures=$((failures + 1))
   fi
 
   if command -v adb >/dev/null 2>&1; then
     ok "ADB: $(adb version | head -1)"
   else
     fail "未找到 adb"
+    failures=$((failures + 1))
   fi
 
-  [[ -x "$GRADLEW" ]] && ok "Gradle Wrapper 可执行" || fail "Gradle Wrapper 不可用"
-  [[ -f "$PROJECT_DIR/settings.gradle" ]] && ok "Android 项目存在" || fail "Android 项目缺失"
+  if [[ -x "$GRADLEW" ]]; then
+    ok "Gradle Wrapper 可执行"
+  else
+    fail "Gradle Wrapper 不可用"
+    failures=$((failures + 1))
+  fi
+  if [[ -f "$PROJECT_DIR/settings.gradle" ]]; then
+    ok "Android 项目存在"
+  else
+    fail "Android 项目缺失"
+    failures=$((failures + 1))
+  fi
 
   local devices
   devices=$(adb devices | /usr/bin/awk 'NR > 1 && $2 == "device" { print $1 }')
@@ -196,6 +233,7 @@ cmd_doctor() {
   else
     dim "尚无 $BUILD_TYPE APK"
   fi
+  (( failures == 0 ))
 }
 
 case "${1:-all}" in

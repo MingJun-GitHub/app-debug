@@ -52,9 +52,9 @@ interface LogResult {
 }
 
 function classify(line: string): EventKind {
-  if (/^\s*✗/.test(line) || /\berror:|\*\* BUILD FAILED \*\*|fatal error|exception|failed|FAILURE:|What went wrong|Execution failed|Caused by:/i.test(line) || /\s[EF]\s{2,}/.test(line)) return 'error'
+  if (/^\s*✗/.test(line) || /\berror:|\*\* BUILD FAILED \*\*|fatal error|exception|failed|FAILURE:|What went wrong|Execution failed|Caused by:/i.test(line) || /\s[EF](?:\/|\s{2,})/.test(line)) return 'error'
   if (/^\s*✓/.test(line) || /\*\* BUILD SUCCEEDED \*\*|BUILD SUCCESSFUL|success|完成|Installed on/i.test(line)) return 'success'
-  if (/^\s*!/.test(line) || /^\s*w:|warning:|warn/i.test(line) || /\sW\s{2,}/.test(line)) return 'warning'
+  if (/^\s*!/.test(line) || /^\s*w:|warning:|warn/i.test(line) || /\sW(?:\/|\s{2,})/.test(line)) return 'warning'
   if (/^(==>|> Task)/.test(line)) return 'command'
   if (/^\s{4}/.test(line)) return 'dim'
   return 'info'
@@ -119,7 +119,6 @@ export function useDebugRunner(platform: 'ios' | 'android') {
     events.value = []
     elapsed.value = 0
     jobResult.value = null
-    jobOffset = 0
   }
 
   async function refreshStatus() {

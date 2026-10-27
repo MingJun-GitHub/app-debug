@@ -63,6 +63,7 @@ class Job:
         self.configuration = configuration
         self.lines = []
         self.line_base = 0
+        self.line_lock = threading.Lock()
         self.done = False
         self.exit_code = None
         self.started = time.time()
@@ -72,16 +73,20 @@ class Job:
         self.completed = threading.Event()
 
     def append(self, text):
-        for line in text.splitlines():
-            self.lines.append(line)
-        if len(self.lines) > 5000:
-            removed = len(self.lines) - 3000
-            self.lines = self.lines[-3000:]
-            self.line_base += removed
+        with self.line_lock:
+            for line in text.splitlines():
+                self.lines.append(line.rstrip("\r"))
+            if len(self.lines) > 5000:
+                removed = len(self.lines) - 3000
+                self.lines = self.lines[-3000:]
+                self.line_base += removed
 
     def snapshot(self, offset=0):
-        truncated = offset < self.line_base
-        local_offset = max(0, offset - self.line_base)
+        with self.line_lock:
+            truncated = offset < self.line_base
+            local_offset = max(0, offset - self.line_base)
+            lines = self.lines[local_offset:]
+            total = self.line_base + len(self.lines)
         return {
             "id": self.id,
             "platform": self.platform,
@@ -91,10 +96,10 @@ class Job:
             "exitCode": self.exit_code,
             "running": self.proc is not None and self.proc.poll() is None,
             "elapsed": round((self.finished or time.time()) - self.started, 1),
-            "total": self.line_base + len(self.lines),
+            "total": total,
             "offset": offset,
             "truncated": truncated,
-            "lines": self.lines[local_offset:],
+            "lines": lines,
         }
 
 
@@ -166,24 +171,44 @@ def stop_job(job):
     _signal_job(job, signal.SIGTERM)
 
     def finish_stop():
-        # 即使 shell 已退出，仍清理可能忽略 TERM 的后代进程。
-        time.sleep(3)
-        _signal_job(job, signal.SIGKILL)
+        job.completed.wait(timeout=3)
+        if job.proc is not None and job.proc.poll() is None:
+            _signal_job(job, signal.SIGKILL)
 
     threading.Thread(target=finish_stop, daemon=True).start()
     return True
 
 
 def start_job(platform, action, configuration=""):
-    job = Job(platform, action, configuration)
     with _jobs_lock:
+        active = [
+            job for job in _jobs.values()
+            if job.platform == platform and not job.done
+        ]
+        if active:
+            return None, active[0]
+        job = Job(platform, action, configuration)
         _jobs[job.id] = job
         if len(_jobs) > 20:
-            for key in sorted(_jobs, key=lambda k: _jobs[k].started)[:-20]:
+            remove_count = len(_jobs) - 20
+            finished = sorted(
+                (key for key, item in _jobs.items() if item.done),
+                key=lambda key: _jobs[key].started,
+            )
+            for key in finished[:remove_count]:
                 _jobs.pop(key, None)
     thread = threading.Thread(target=_run_job, args=(job,), daemon=True)
     thread.start()
-    return job
+    return job, None
+
+
+def stop_all_jobs():
+    with _jobs_lock:
+        active = [job for job in _jobs.values() if not job.done]
+    for job in active:
+        stop_job(job)
+    for job in active:
+        job.completed.wait(timeout=4)
 
 
 def latest_ios_sdk():
@@ -467,7 +492,7 @@ class Handler(BaseHTTPRequestHandler):
             if not keyword:
                 return self._send(400, json.dumps({"error": "缺少 q 参数"}))
             try:
-                limit = min(int((params.get("limit") or ["200"])[0]), 1000)
+                limit = max(1, min(int((params.get("limit") or ["200"])[0]), 1000))
             except ValueError:
                 limit = 200
             use_regex = (params.get("regex") or ["0"])[0] == "1"
@@ -523,18 +548,12 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(400, json.dumps({"error": "action not allowed"}))
             if configuration and configuration not in ("Debug", "Release"):
                 return self._send(400, json.dumps({"error": "configuration not allowed"}))
-            with _jobs_lock:
-                for job in _jobs.values():
-                    if (
-                        job.platform == platform
-                        and not job.done
-                        and job.action in ("all", "build")
-                    ):
-                        return self._send(409, json.dumps({
-                            "error": "已有构建在进行中",
-                            "jobId": job.id,
-                        }))
-            job = start_job(platform, action, configuration)
+            job, conflict = start_job(platform, action, configuration)
+            if conflict:
+                return self._send(409, json.dumps({
+                    "error": f"该平台已有任务在运行: {conflict.action}",
+                    "jobId": conflict.id,
+                }))
             return self._send(200, json.dumps({"jobId": job.id}))
 
         if route == ["stop"]:
@@ -584,6 +603,7 @@ def main():
     except KeyboardInterrupt:
         print("\n已停止")
     finally:
+        stop_all_jobs()
         server.server_close()
 
 

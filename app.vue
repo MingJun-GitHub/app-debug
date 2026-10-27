@@ -12,12 +12,13 @@ const runners = {
 
 const platform = ref<PlatformKey>('ios')
 const activeTabIndexes = reactive<Record<PlatformKey, number>>({ ios: 0, android: 0 })
-const selectedDevices = reactive<Record<PlatformKey, any>>({ ios: null, android: null })
+const selectedDevices = reactive<Record<PlatformKey, any>>({ ios: '', android: '' })
 const buildConfigurations = reactive<Record<PlatformKey, string>>({ ios: 'Debug', android: 'Debug' })
 const eventQueries = reactive<Record<PlatformKey, string>>({ ios: '', android: '' })
 const severities = reactive<Record<PlatformKey, SeverityFilter>>({ ios: 'all', android: 'all' })
 const logQueries = reactive<Record<PlatformKey, string>>({ ios: '', android: '' })
 const logRegex = reactive<Record<PlatformKey, boolean>>({ ios: false, android: false })
+const refreshingDevices = reactive<Record<PlatformKey, boolean>>({ ios: false, android: false })
 const copied = ref(false)
 const eventPane = ref<HTMLElement | null>(null)
 let statusTimer: ReturnType<typeof setInterval> | undefined
@@ -75,6 +76,62 @@ const tabs = [
   { key: 'issues', label: '问题', icon: 'i-heroicons-exclamation-triangle' },
   { key: 'logs', label: '日志', icon: 'i-heroicons-document-text' }
 ]
+
+const platformTabs = [
+  { key: 'ios', label: 'iOS' },
+  { key: 'android', label: 'Android' }
+]
+
+const platformTabsUi = {
+  wrapper: 'space-y-0',
+  list: {
+    base: 'relative',
+    rounded: 'rounded-[10px]',
+    padding: 'p-[3px]',
+    height: 'h-[38px]',
+    width: 'w-[235px]',
+    marker: {
+      wrapper: 'absolute top-[3px] left-[3px] duration-200 ease-out',
+      base: 'rounded-[7px] shadow-[0_2px_8px_rgba(0,0,0,0.35)]',
+      background: 'bg-primary-500 dark:bg-primary-500'
+    },
+    tab: {
+      base: 'relative z-10 font-semibold',
+      height: 'h-[30px]',
+      active: 'text-white',
+      inactive: 'text-slate-400 hover:text-slate-200'
+    }
+  }
+}
+
+const debugTabsUi = {
+  wrapper: 'space-y-0',
+  list: {
+    base: 'relative',
+    rounded: 'rounded-lg',
+    padding: 'p-[3px]',
+    height: 'h-[40px]',
+    marker: {
+      wrapper: 'absolute top-[3px] left-[3px] duration-200 ease-out',
+      base: 'rounded-md shadow-sm',
+      background: 'bg-primary-500 dark:bg-primary-500'
+    },
+    tab: {
+      base: 'relative z-10',
+      height: 'h-[34px]',
+      active: 'text-white',
+      inactive: 'text-slate-400 hover:text-slate-200'
+    }
+  }
+}
+
+const platformIndex = computed({
+  get: () => platformTabs.findIndex(tab => tab.key === platform.value),
+  set: (index) => {
+    const next = platformTabs[index]?.key as PlatformKey | undefined
+    if (next) platform.value = next
+  }
+})
 
 const activeTabIndex = computed({
   get: () => activeTabIndexes[platform.value],
@@ -177,6 +234,30 @@ async function handleDeviceChange(value: any) {
   if (device?.available) await runner.value.selectDevice(device).catch(() => {})
 }
 
+async function refreshCurrentDevices() {
+  if (refreshingDevices[platform.value]) return
+  refreshingDevices[platform.value] = true
+  try {
+    await Promise.all([
+      runner.value.refreshStatus(),
+      runner.value.loadDevices()
+    ])
+    const devices = runner.value.physicalDevices.value
+    const currentUdid = selectedDevices[platform.value]?.udid
+    const preferred = devices.find(device => device.udid === currentUdid)
+      || devices.find(device => device.available)
+    if (preferred?.available) {
+      selectedDevices[platform.value] = deviceOptionsFor(platform.value)
+        .find(option => option.udid === preferred.udid) || null
+      await runner.value.selectDevice(preferred).catch(() => {})
+    } else {
+      selectedDevices[platform.value] = ''
+    }
+  } finally {
+    refreshingDevices[platform.value] = false
+  }
+}
+
 async function handleRun(action: string) {
   showTab('run')
   await runner.value.runAction(action, buildConfiguration.value)
@@ -223,6 +304,21 @@ function handleShortcut(event: KeyboardEvent) {
   } else if (key === 'b') {
     event.preventDefault()
     handleRun('build')
+  } else if (key === 'i') {
+    event.preventDefault()
+    handleRun('install')
+  } else if (key === 'l' && event.shiftKey) {
+    event.preventDefault()
+    handleRun('logs')
+  } else if (key === 'l') {
+    event.preventDefault()
+    handleRun('launch')
+  } else if (key === 'd' && event.shiftKey) {
+    event.preventDefault()
+    handleRun('doctor')
+  } else if (key === 'd') {
+    event.preventDefault()
+    handleRun('log')
   } else if (key === 'f') {
     event.preventDefault()
     showTab('run')
@@ -262,32 +358,24 @@ onBeforeUnmount(() => {
           </div>
         </div>
 
-        <div class="platform-switch" aria-label="调试平台">
-          <UButton
-            :color="platform === 'ios' ? 'primary' : 'gray'"
-            :variant="platform === 'ios' ? 'solid' : 'ghost'"
-            @click="platform = 'ios'"
-          >
-            <IosMark class="platform-icon" />
-            iOS
-          </UButton>
-          <UButton
-            :color="platform === 'android' ? 'primary' : 'gray'"
-            :variant="platform === 'android' ? 'solid' : 'ghost'"
-            @click="platform = 'android'"
-          >
-            <AndroidMark class="platform-icon" />
-            Android
-          </UButton>
-        </div>
+        <UTabs
+          v-model="platformIndex"
+          :items="platformTabs"
+          :content="false"
+          :ui="platformTabsUi"
+          class="platform-tabs"
+          aria-label="调试平台"
+        >
+          <template #icon="{ item }">
+            <IosMark v-if="item.key === 'ios'" class="platform-icon" />
+            <AndroidMark v-else class="platform-icon" />
+          </template>
+        </UTabs>
 
         <div class="context-bar">
-          <UButton color="gray" variant="soft" icon="i-heroicons-cube">
+          <UButton color="gray" variant="ghost" icon="i-heroicons-cube">
             {{ projectName }}
           </UButton>
-          <UBadge :color="buildConfiguration === 'Debug' ? 'amber' : 'green'" variant="subtle">
-            {{ buildConfiguration }}
-          </UBadge>
         </div>
 
         <div class="top-spacer" />
@@ -295,18 +383,22 @@ onBeforeUnmount(() => {
           color="gray"
           variant="ghost"
           icon="i-heroicons-wrench-screwdriver"
+          class="shortcut-top"
           :disabled="busy"
           @click="handleRun('doctor')"
         >
           环境检查
+          <kbd class="shortcut-key">⌘⇧D</kbd>
         </UButton>
         <UButton
           color="gray"
           variant="ghost"
           icon="i-heroicons-trash"
+          class="shortcut-top"
           @click="clearCurrentEvents"
         >
           清空
+          <kbd class="shortcut-key">⌘K</kbd>
         </UButton>
       </header>
 
@@ -316,20 +408,34 @@ onBeforeUnmount(() => {
 
           <div class="field-group">
             <label class="field-label">目标设备</label>
-            <USelectMenu
-              v-model="selectedDevice"
-              :options="deviceOptions"
-              option-attribute="label"
-              placeholder="选择已连接设备"
-              :icon="platform === 'ios' ? 'i-heroicons-device-phone-mobile' : 'i-heroicons-device-tablet'"
-              searchable
-              searchable-placeholder="搜索设备"
-              class="w-full"
-              @update:model-value="handleDeviceChange"
-            />
+            <div class="device-row">
+              <USelectMenu
+                v-model="selectedDevice"
+                :options="deviceOptions"
+                option-attribute="label"
+                placeholder="选择已连接设备"
+                :icon="platform === 'ios' ? 'i-heroicons-device-phone-mobile' : 'i-heroicons-device-tablet'"
+                searchable
+                searchable-placeholder="搜索设备"
+                class="min-w-0 flex-1"
+                @update:model-value="handleDeviceChange"
+              />
+              <UTooltip text="重新检测已连接设备">
+                <UButton
+                  color="primary"
+                  variant="soft"
+                  icon="i-heroicons-arrow-path"
+                  square
+                  :loading="refreshingDevices[platform]"
+                  aria-label="重新检测设备"
+                  @click="refreshCurrentDevices"
+                />
+              </UTooltip>
+            </div>
             <div class="field-hint">
               <span class="mini-dot" :class="{ online: connectedDevice?.available }" />
               {{ connectedDevice?.name || `未检测到 ${platformName} 设备` }}
+              <span class="hint-separator">· 可点右侧刷新</span>
             </div>
           </div>
 
@@ -359,48 +465,58 @@ onBeforeUnmount(() => {
               block
               size="md"
               icon="i-heroicons-play-solid"
+              class="run-primary"
               :loading="busy"
               @click="handleRun('all')"
             >
-              构建并启动
+              <span>构建并启动</span>
+              <kbd class="shortcut-key">⌘↵</kbd>
             </UButton>
 
             <div class="action-grid">
               <UButton
                 color="gray"
-                variant="soft"
-                icon="i-heroicons-hammer"
+                variant="ghost"
+                icon="i-heroicons-wrench-screwdriver"
+                class="shortcut-button"
                 :disabled="busy"
                 @click="handleRun('build')"
               >
-                构建
+                <span>构建</span>
+                <kbd class="shortcut-key">⌘B</kbd>
               </UButton>
               <UButton
                 color="gray"
-                variant="soft"
+                variant="ghost"
                 icon="i-heroicons-arrow-down-tray"
+                class="shortcut-button"
                 :disabled="busy"
                 @click="handleRun('install')"
               >
-                安装
+                <span>安装</span>
+                <kbd class="shortcut-key">⌘I</kbd>
               </UButton>
               <UButton
                 color="gray"
-                variant="soft"
+                variant="ghost"
                 icon="i-heroicons-rocket-launch"
+                class="shortcut-button"
                 :disabled="busy"
                 @click="handleRun('launch')"
               >
-                启动
+                <span>启动</span>
+                <kbd class="shortcut-key">⌘L</kbd>
               </UButton>
               <UButton
                 color="gray"
-                variant="soft"
+                variant="ghost"
                 icon="i-heroicons-document-magnifying-glass"
+                class="shortcut-button"
                 :disabled="busy"
                 @click="handleRun('logs')"
               >
-                拉日志
+                <span>拉日志</span>
+                <kbd class="shortcut-key">⇧⌘L</kbd>
               </UButton>
             </div>
           </UCard>
@@ -409,16 +525,18 @@ onBeforeUnmount(() => {
             color="red"
             variant="ghost"
             icon="i-heroicons-stop"
+            class="stop-button"
             block
             :disabled="!busy"
             @click="stopCurrentJob"
           >
             停止任务
+            <kbd class="shortcut-key">⌘.</kbd>
           </UButton>
 
           <div class="sidebar-tip">
             <UIcon name="i-heroicons-command-line" />
-            <span><kbd>⌘ ↵</kbd> 构建并启动</span>
+            <span><kbd>⌘F</kbd> 过滤 · <kbd>⌘.</kbd> 停止</span>
           </div>
         </aside>
 
@@ -442,6 +560,7 @@ onBeforeUnmount(() => {
               v-model="activeTabIndex"
               :items="tabs"
               :content="false"
+              :ui="debugTabsUi"
               class="debug-tabs"
             />
 
@@ -457,7 +576,7 @@ onBeforeUnmount(() => {
                   id="event-filter"
                   v-model="eventQuery"
                   icon="i-heroicons-magnifying-glass"
-                  placeholder="实时过滤日志"
+                  placeholder="实时过滤日志 · ⌘F"
                   class="event-filter"
                 />
                 <UButton
@@ -468,6 +587,7 @@ onBeforeUnmount(() => {
                   @click="handleRun('log')"
                 >
                   启动并跟随
+                  <kbd class="shortcut-key">⌘D</kbd>
                 </UButton>
               </div>
 
@@ -523,7 +643,15 @@ onBeforeUnmount(() => {
             </section>
 
             <section v-else-if="activeTab === 'issues'" class="pane">
-              <div v-if="errors.length" class="issues-layout">
+              <div class="pane-toolbar">
+                <div class="run-status">
+                  <UIcon name="i-heroicons-exclamation-triangle" />
+                  <span>当前问题</span>
+                </div>
+                <div class="toolbar-spacer" />
+                <span class="event-summary">{{ errors.length }} 个错误 · {{ callStack.length }} 个源码位置</span>
+              </div>
+              <div v-if="errors.length" class="issues-layout pane-body">
                 <UAlert
                   color="red"
                   variant="soft"
@@ -598,7 +726,7 @@ onBeforeUnmount(() => {
                   </div>
                 </UCard>
               </div>
-              <div v-else class="empty-state panel-empty">
+              <div v-else class="empty-state panel-empty pane-body">
                 <UIcon name="i-heroicons-shield-check" class="empty-icon success" />
                 <div>当前运行没有错误</div>
                 <p>{{ jobDone ? '构建和启动日志中尚未发现错误。' : '运行结束后这里会显示错误与源码位置。' }}</p>
@@ -606,7 +734,7 @@ onBeforeUnmount(() => {
             </section>
 
             <section v-else class="pane">
-              <div class="log-search">
+              <div class="pane-toolbar log-search">
                 <UInput
                   v-model="logQuery"
                   icon="i-heroicons-magnifying-glass"
@@ -622,7 +750,7 @@ onBeforeUnmount(() => {
                   搜索
                 </UButton>
               </div>
-              <div class="log-result">
+              <div class="log-result pane-body">
                 <div v-if="!logs.length" class="empty-state compact">
                   {{ logMeta }}
                 </div>
