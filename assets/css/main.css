@@ -183,8 +183,14 @@ input {
   white-space: nowrap;
 }
 
-.hint-separator {
-  color: #465166;
+.device-refresh-link {
+  align-self: flex-start;
+  justify-content: flex-start;
+  padding: 0 !important;
+}
+
+.device-alert {
+  margin-top: 2px;
 }
 
 .mini-dot {
@@ -586,7 +592,8 @@ kbd {
 
 .issue-line {
   display: grid;
-  grid-template-columns: 60px minmax(0, 1fr);
+  grid-template-columns: 60px minmax(0, 1fr) 30px;
+  align-items: start;
   gap: 8px;
   padding: 7px 0;
   border-bottom: 1px solid rgba(37, 44, 57, 0.5);
@@ -596,7 +603,7 @@ kbd {
   border-bottom: 0;
 }
 
-.issue-line span {
+.issue-time {
   color: var(--app-faint);
   font: 10px var(--app-mono);
 }
@@ -617,7 +624,7 @@ kbd {
 
 .stack-row {
   display: grid;
-  grid-template-columns: 22px minmax(0, 1fr);
+  grid-template-columns: 22px minmax(0, 1fr) 30px;
   align-items: center;
   gap: 7px;
   padding: 8px;
@@ -692,7 +699,7 @@ kbd {
 
 .log-line {
   display: grid;
-  grid-template-columns: 52px minmax(0, 1fr);
+  grid-template-columns: 52px minmax(0, 1fr) 30px;
   gap: 10px;
   padding: 3px 12px;
 }
@@ -701,7 +708,7 @@ kbd {
   background: #121720;
 }
 
-.log-line span {
+.log-no {
   color: var(--app-faint);
   text-align: right;
 }

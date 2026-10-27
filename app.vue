@@ -19,10 +19,11 @@ const severities = reactive<Record<PlatformKey, SeverityFilter>>({ ios: 'all', a
 const logQueries = reactive<Record<PlatformKey, string>>({ ios: '', android: '' })
 const logRegex = reactive<Record<PlatformKey, boolean>>({ ios: false, android: false })
 const refreshingDevices = reactive<Record<PlatformKey, boolean>>({ ios: false, android: false })
-const copied = ref(false)
+const copiedTarget = ref('')
 const eventPane = ref<HTMLElement | null>(null)
 let statusTimer: ReturnType<typeof setInterval> | undefined
 let deviceTimer: ReturnType<typeof setInterval> | undefined
+let copyTimer: ReturnType<typeof setTimeout> | undefined
 
 const runner = computed(() => runners[platform.value])
 const status = computed(() => runner.value.status.value)
@@ -170,6 +171,26 @@ const severityOptions: Array<{ key: SeverityFilter, label: string }> = [
 const issueCount = computed(() => errors.value.length)
 const platformName = computed(() => platform.value === 'ios' ? 'iOS' : 'Android')
 const projectName = computed(() => status.value?.projectName || (platform.value === 'ios' ? 'BloomchicStore' : 'Bloomchic Android'))
+const deviceAlert = computed(() => {
+  const device = connectedDevice.value
+  if (!device) {
+    return {
+      color: 'amber' as const,
+      icon: 'i-heroicons-device-phone-mobile',
+      title: `未检测到 ${platformName.value} 设备`,
+      description: '连接设备并完成授权后，点击“重新检测设备”。'
+    }
+  }
+  if (!device.available) {
+    return {
+      color: 'red' as const,
+      icon: 'i-heroicons-exclamation-triangle',
+      title: `${device.name || platformName.value + ' 设备'} 当前不可用`,
+      description: device.error || '检查连接、解锁和设备授权状态后重新检测。'
+    }
+  }
+  return null
+})
 
 const filteredEvents = computed(() => {
   const query = eventQuery.value.trim().toLowerCase()
@@ -200,6 +221,21 @@ const runDotClass = computed(() => {
 
 const firstError = computed(() => errors.value.at(-1)?.text || '')
 const latestEvents = computed(() => events.value.slice(-80))
+const errorCopyText = computed(() => [
+  `Platform: ${platformName.value}`,
+  `Project: ${projectName.value}`,
+  `SDK: ${sdk.value || '-'}`,
+  `Device: ${connectedDevice.value?.name || '-'}`,
+  '',
+  'Errors:',
+  ...errors.value.map(event => `[${event.time}] ${event.text}`),
+  '',
+  'Source locations:',
+  ...callStack.value,
+  '',
+  'Recent context:',
+  ...latestEvents.value.map(event => `[${event.time}] ${event.text}`)
+].join('\n'))
 const logEmptyTitle = computed(() => {
   if (logMeta.value === '尚未搜索') return '尚未搜索日志'
   if (/不存在|失败|错误|not found/i.test(logMeta.value)) return '日志暂不可用'
@@ -277,13 +313,25 @@ async function handleRun(action: string) {
   if (eventPane.value) eventPane.value.scrollTop = eventPane.value.scrollHeight
 }
 
-async function copyError() {
-  if (!firstError.value) return
-  await navigator.clipboard.writeText(
-    [firstError.value, ...callStack.value].join('\n')
-  )
-  copied.value = true
-  setTimeout(() => { copied.value = false }, 1600)
+async function copyText(target: string, text: string) {
+  if (!text.trim()) return
+  try {
+    await navigator.clipboard.writeText(text)
+  } catch {
+    const textarea = document.createElement('textarea')
+    textarea.value = text
+    textarea.style.position = 'fixed'
+    textarea.style.opacity = '0'
+    document.body.appendChild(textarea)
+    textarea.select()
+    document.execCommand('copy')
+    textarea.remove()
+  }
+  copiedTarget.value = target
+  if (copyTimer) clearTimeout(copyTimer)
+  copyTimer = setTimeout(() => {
+    if (copiedTarget.value === target) copiedTarget.value = ''
+  }, 1600)
 }
 
 function eventClass(event: DebugEvent) {
@@ -352,6 +400,7 @@ onMounted(() => {
 onBeforeUnmount(() => {
   if (statusTimer) clearInterval(statusTimer)
   if (deviceTimer) clearInterval(deviceTimer)
+  if (copyTimer) clearTimeout(copyTimer)
   window.removeEventListener('keydown', handleShortcut)
 })
 </script>
@@ -442,18 +491,27 @@ onBeforeUnmount(() => {
             </div>
             <UButton
               color="primary"
-              variant="ghost"
+              variant="link"
               icon="i-heroicons-arrow-path"
-              block
               size="sm"
+              class="device-refresh-link"
               :loading="refreshingDevices[platform]"
               @click="refreshCurrentDevices"
             >
               重新检测设备
             </UButton>
-            <div class="field-hint">
-              <span class="mini-dot" :class="{ online: connectedDevice?.available }" />
-              {{ connectedDevice?.name || `未检测到 ${platformName} 设备` }}
+            <UAlert
+              v-if="deviceAlert"
+              :color="deviceAlert.color"
+              variant="soft"
+              :icon="deviceAlert.icon"
+              :title="deviceAlert.title"
+              :description="deviceAlert.description"
+              class="device-alert"
+            />
+            <div v-else class="field-hint">
+              <span class="mini-dot online" />
+              {{ connectedDevice?.name }}
             </div>
           </div>
 
@@ -671,6 +729,18 @@ onBeforeUnmount(() => {
                   <span>当前问题</span>
                 </div>
                 <div class="toolbar-spacer" />
+                <UTooltip text="复制全部错误、调用栈和最近上下文">
+                  <UButton
+                    color="gray"
+                    variant="ghost"
+                    size="xs"
+                    square
+                    :icon="copiedTarget === 'all-errors' ? 'i-heroicons-check' : 'i-heroicons-clipboard'"
+                    aria-label="复制全部错误信息"
+                    :disabled="!errors.length"
+                    @click="copyText('all-errors', errorCopyText)"
+                  />
+                </UTooltip>
                 <span class="event-summary">{{ errors.length }} 个错误 · {{ callStack.length }} 个源码位置</span>
               </div>
               <div v-if="errors.length" class="issues-layout pane-body">
@@ -680,19 +750,7 @@ onBeforeUnmount(() => {
                   icon="i-heroicons-exclamation-circle"
                   title="本次运行发现错误"
                   :description="firstError"
-                >
-                  <template #trailing>
-                    <UButton
-                      size="xs"
-                      color="red"
-                      variant="soft"
-                      :icon="copied ? 'i-heroicons-check' : 'i-heroicons-clipboard'"
-                      @click="copyError"
-                    >
-                      {{ copied ? '已复制' : '复制' }}
-                    </UButton>
-                  </template>
-                </UAlert>
+                />
 
                 <div class="issue-grid">
                   <UCard>
@@ -704,8 +762,19 @@ onBeforeUnmount(() => {
                     </template>
                     <div class="issue-lines">
                       <div v-for="event in errors" :key="event.id" class="issue-line">
-                        <span>{{ event.time }}</span>
+                        <span class="issue-time">{{ event.time }}</span>
                         <pre>{{ event.text }}</pre>
+                        <UTooltip text="复制这条错误">
+                          <UButton
+                            color="gray"
+                            variant="ghost"
+                            size="xs"
+                            square
+                            :icon="copiedTarget === `error-${event.id}` ? 'i-heroicons-check' : 'i-heroicons-clipboard'"
+                            aria-label="复制这条错误"
+                            @click="copyText(`error-${event.id}`, event.text)"
+                          />
+                        </UTooltip>
                       </div>
                     </div>
                   </UCard>
@@ -725,6 +794,17 @@ onBeforeUnmount(() => {
                       >
                         <span>{{ index + 1 }}</span>
                         <code>{{ frame }}</code>
+                        <UTooltip text="复制源码位置">
+                          <UButton
+                            color="gray"
+                            variant="ghost"
+                            size="xs"
+                            square
+                            :icon="copiedTarget === `frame-${index}` ? 'i-heroicons-check' : 'i-heroicons-clipboard'"
+                            aria-label="复制源码位置"
+                            @click="copyText(`frame-${index}`, frame)"
+                          />
+                        </UTooltip>
                       </div>
                     </div>
                     <div v-else class="small-empty">
@@ -773,6 +853,17 @@ onBeforeUnmount(() => {
                 >
                   搜索
                 </UButton>
+                <UTooltip text="复制全部搜索结果">
+                  <UButton
+                    color="gray"
+                    variant="ghost"
+                    square
+                    :icon="copiedTarget === 'all-logs' ? 'i-heroicons-check' : 'i-heroicons-clipboard'"
+                    aria-label="复制全部日志"
+                    :disabled="!logs.length"
+                    @click="copyText('all-logs', logs.map(line => line.text).join('\n'))"
+                  />
+                </UTooltip>
               </div>
               <AppEmptyState
                 v-if="!logs.length"
@@ -783,8 +874,19 @@ onBeforeUnmount(() => {
               />
               <div v-else class="log-result pane-body">
                 <div v-for="line in logs" :key="line.n" class="log-line">
-                  <span>{{ line.n }}</span>
+                  <span class="log-no">{{ line.n }}</span>
                   <code>{{ line.text }}</code>
+                  <UTooltip text="复制这条日志">
+                    <UButton
+                      color="gray"
+                      variant="ghost"
+                      size="xs"
+                      square
+                      :icon="copiedTarget === `log-${line.n}` ? 'i-heroicons-check' : 'i-heroicons-clipboard'"
+                      aria-label="复制这条日志"
+                      @click="copyText(`log-${line.n}`, line.text)"
+                    />
+                  </UTooltip>
                 </div>
               </div>
               <div v-if="logs.length" class="log-meta">{{ logMeta }}</div>
