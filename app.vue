@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import type { DebugEvent } from '~/composables/useDebugRunner'
+import { ALL_LOG_FILTER, type LogFilter } from '~/types/log-filter'
 
 type PlatformKey = 'ios' | 'android'
 type TabKey = 'run' | 'issues' | 'logs'
@@ -14,10 +15,12 @@ const platform = ref<PlatformKey>('ios')
 const activeTabIndexes = reactive<Record<PlatformKey, number>>({ ios: 0, android: 0 })
 const selectedDevices = reactive<Record<PlatformKey, any>>({ ios: '', android: '' })
 const buildConfigurations = reactive<Record<PlatformKey, string>>({ ios: 'Debug', android: 'Debug' })
-const eventQueries = reactive<Record<PlatformKey, string>>({ ios: '', android: '' })
 const severities = reactive<Record<PlatformKey, SeverityFilter>>({ ios: 'all', android: 'all' })
-const logQueries = reactive<Record<PlatformKey, string>>({ ios: '', android: '' })
-const logRegex = reactive<Record<PlatformKey, boolean>>({ ios: false, android: false })
+const keywordQueries = reactive<Record<PlatformKey, string>>({ ios: '', android: '' })
+const selectedFilters = reactive<Record<PlatformKey, LogFilter>>({
+  ios: ALL_LOG_FILTER,
+  android: ALL_LOG_FILTER
+})
 const refreshingDevices = reactive<Record<PlatformKey, boolean>>({ ios: false, android: false })
 const copiedTarget = ref('')
 const eventPane = ref<HTMLElement | null>(null)
@@ -52,24 +55,19 @@ const buildConfiguration = computed({
   set: (value) => { buildConfigurations[platform.value] = value }
 })
 
-const eventQuery = computed({
-  get: () => eventQueries[platform.value],
-  set: (value) => { eventQueries[platform.value] = value }
-})
-
 const severity = computed({
   get: () => severities[platform.value],
   set: (value) => { severities[platform.value] = value }
 })
 
-const logQuery = computed({
-  get: () => logQueries[platform.value],
-  set: (value) => { logQueries[platform.value] = value }
+const selectedFilter = computed({
+  get: () => selectedFilters[platform.value],
+  set: (value) => { selectedFilters[platform.value] = value }
 })
 
-const currentLogRegex = computed({
-  get: () => logRegex[platform.value],
-  set: (value) => { logRegex[platform.value] = value }
+const keywordQuery = computed({
+  get: () => keywordQueries[platform.value],
+  set: (value) => { keywordQueries[platform.value] = value }
 })
 
 const tabs = [
@@ -193,10 +191,25 @@ const deviceAlert = computed(() => {
 })
 
 const filteredEvents = computed(() => {
-  const query = eventQuery.value.trim().toLowerCase()
+  const filter = selectedFilter.value
+  let queryPattern: RegExp | null = null
+  if (filter.query) {
+    if (filter.regex) {
+      try {
+        queryPattern = new RegExp(filter.query, 'i')
+      } catch {
+        queryPattern = null
+      }
+    }
+  }
   return events.value.filter((event) => {
-    const matchesQuery = !query || event.text.toLowerCase().includes(query)
+    const matchesQuery = !filter.query
+      || (queryPattern
+        ? queryPattern.test(event.text)
+        : event.text.toLowerCase().includes(filter.query.toLowerCase()))
     if (!matchesQuery) return false
+    const keyword = keywordQuery.value.trim()
+    if (keyword && !event.text.toLowerCase().includes(keyword.toLowerCase())) return false
     if (severity.value === 'all') return true
     if (severity.value === 'error') return event.kind === 'error'
     if (severity.value === 'warning') return event.kind === 'warning'
@@ -352,7 +365,22 @@ function stopCurrentJob() {
 }
 
 function searchCurrentLogs() {
-  runner.value.searchLogs(logQueries[platform.value], logRegex[platform.value])
+  const primary = selectedFilter.value.query.trim()
+  const keyword = keywordQuery.value.trim()
+  if (!primary && !keyword) return
+  if (!keyword) {
+    runner.value.searchLogs(primary, selectedFilter.value.regex)
+    return
+  }
+
+  const escapeRegex = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  const primaryPattern = primary
+    ? `(?=.*${selectedFilter.value.regex ? `(?:${primary})` : escapeRegex(primary)})`
+    : ''
+  runner.value.searchLogs(
+    `${primaryPattern}(?=.*${escapeRegex(keyword)})`,
+    true
+  )
 }
 
 function handleShortcut(event: KeyboardEvent) {
@@ -382,7 +410,7 @@ function handleShortcut(event: KeyboardEvent) {
   } else if (key === 'f') {
     event.preventDefault()
     showTab('run')
-    nextTick(() => document.querySelector<HTMLInputElement>('#event-filter')?.focus())
+    nextTick(() => document.querySelector<HTMLInputElement>('#event-keyword-filter')?.focus())
   } else if (key === 'k') {
     event.preventDefault()
     clearCurrentEvents()
@@ -665,12 +693,17 @@ onBeforeUnmount(() => {
                   {{ filteredEvents.length }} / {{ events.length }} 条
                 </span>
                 <div class="toolbar-spacer" />
-                <UInput
-                  id="event-filter"
-                  v-model="eventQuery"
-                  icon="i-heroicons-magnifying-glass"
-                  placeholder="实时过滤日志 · ⌘F"
+                <LogFilterSelect
+                  v-model="selectedFilter"
                   class="event-filter"
+                  placeholder="筛选实时日志 · ⌘F"
+                />
+                <UInput
+                  id="event-keyword-filter"
+                  v-model="keywordQuery"
+                  icon="i-heroicons-magnifying-glass"
+                  placeholder="二次搜索关键词"
+                  class="keyword-filter"
                 />
                 <UButton
                   color="gray"
@@ -718,6 +751,17 @@ onBeforeUnmount(() => {
                     class="event-icon"
                   />
                   <span class="event-text">{{ event.text }}</span>
+                  <UTooltip text="复制这条日志">
+                    <UButton
+                      color="gray"
+                      variant="ghost"
+                      size="xs"
+                      square
+                      :icon="copiedTarget === `event-${event.id}` ? 'i-heroicons-check' : 'i-heroicons-clipboard'"
+                      aria-label="复制这条运行日志"
+                      @click="copyText(`event-${event.id}`, event.text)"
+                    />
+                  </UTooltip>
                 </div>
               </div>
             </section>
@@ -839,16 +883,21 @@ onBeforeUnmount(() => {
 
             <section v-else class="pane">
               <div class="pane-toolbar log-search">
-                <UInput
-                  v-model="logQuery"
-                  icon="i-heroicons-magnifying-glass"
+                <LogFilterSelect
+                  v-model="selectedFilter"
                   :placeholder="`搜索 ${platformName} decoded.log，例如 HttpLogging / error / request-id`"
                   class="flex-1"
+                />
+                <UInput
+                  v-model="keywordQuery"
+                  icon="i-heroicons-magnifying-glass"
+                  placeholder="二次搜索关键词"
+                  class="keyword-filter"
                   @keydown.enter="searchCurrentLogs"
                 />
-                <UCheckbox v-model="currentLogRegex" label="正则" />
                 <UButton
                   icon="i-heroicons-magnifying-glass"
+                  :disabled="!selectedFilter.query && !keywordQuery.trim()"
                   @click="searchCurrentLogs"
                 >
                   搜索

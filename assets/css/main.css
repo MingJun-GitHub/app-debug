@@ -429,7 +429,11 @@ kbd {
 }
 
 .event-filter {
-  width: 210px;
+  width: 320px;
+}
+
+.keyword-filter {
+  width: 220px;
 }
 
 .severity-filter {
@@ -462,7 +466,7 @@ kbd {
 
 .event-row {
   display: grid;
-  grid-template-columns: 70px 18px minmax(0, 1fr);
+  grid-template-columns: 70px 18px minmax(0, 1fr) 30px;
   align-items: start;
   gap: 5px;
   padding: 4px 12px;
@@ -488,6 +492,14 @@ kbd {
   min-width: 0;
   overflow-wrap: anywhere;
   white-space: pre-wrap;
+}
+
+.event-row > button {
+  opacity: 0.55;
+}
+
+.event-row:hover > button {
+  opacity: 1;
 }
 
 .event-info .event-icon,
@@ -781,7 +793,11 @@ kbd {
   }
 
   .event-filter {
-    width: 165px;
+    width: 240px;
+  }
+
+  .keyword-filter {
+    width: 190px;
   }
 
   .pane-toolbar {
