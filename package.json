@@ -1,0 +1,20 @@
+{
+  "name": "app-debug",
+  "version": "0.3.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "node scripts/dev.mjs",
+    "dev:ui": "nuxt dev",
+    "dev:api": "python3 server.py --no-browser",
+    "build": "nuxt generate",
+    "preview": "nuxt preview",
+    "postinstall": "nuxt prepare"
+  },
+  "dependencies": {
+    "@nuxt/ui": "2.22.3",
+    "nuxt": "3.21.0",
+    "vue": "3.5.27",
+    "vue-router": "4.6.4"
+  }
+}
