@@ -3,7 +3,7 @@ import type { DebugEvent } from '~/composables/useDebugRunner'
 import { ALL_LOG_FILTER, type LogFilter } from '~/types/log-filter'
 
 type PlatformKey = 'ios' | 'android'
-type TabKey = 'run' | 'issues' | 'logs'
+type TabKey = 'run' | 'issues' | 'logs' | 'device'
 type SeverityFilter = 'all' | 'error' | 'warning' | 'network'
 
 const runners = {
@@ -17,12 +17,15 @@ const selectedDevices = reactive<Record<PlatformKey, any>>({ ios: '', android: '
 const buildConfigurations = reactive<Record<PlatformKey, string>>({ ios: 'Debug', android: 'Debug' })
 const severities = reactive<Record<PlatformKey, SeverityFilter>>({ ios: 'all', android: 'all' })
 const keywordQueries = reactive<Record<PlatformKey, string>>({ ios: '', android: '' })
+const experimentQueries = reactive<Record<PlatformKey, string>>({ ios: '', android: '' })
 const selectedFilters = reactive<Record<PlatformKey, LogFilter>>({
   ios: ALL_LOG_FILTER,
   android: ALL_LOG_FILTER
 })
 const refreshingDevices = reactive<Record<PlatformKey, boolean>>({ ios: false, android: false })
 const copiedTarget = ref('')
+const stopConfirmOpen = ref(false)
+const stopping = ref(false)
 const eventPane = ref<HTMLElement | null>(null)
 let statusTimer: ReturnType<typeof setInterval> | undefined
 let deviceTimer: ReturnType<typeof setInterval> | undefined
@@ -32,6 +35,9 @@ const runner = computed(() => runners[platform.value])
 const status = computed(() => runner.value.status.value)
 const physicalDevices = computed(() => runner.value.physicalDevices.value)
 const connectedDevice = computed(() => runner.value.connectedDevice.value)
+const deviceContext = computed(() => runner.value.deviceContext.value)
+const deviceContextLoading = computed(() => runner.value.deviceContextLoading.value)
+const deviceContextError = computed(() => runner.value.deviceContextError.value)
 const sdk = computed(() => runner.value.sdk.value)
 const events = computed(() => runner.value.events.value)
 const errors = computed(() => runner.value.errors.value)
@@ -70,10 +76,16 @@ const keywordQuery = computed({
   set: (value) => { keywordQueries[platform.value] = value }
 })
 
+const experimentQuery = computed({
+  get: () => experimentQueries[platform.value],
+  set: (value) => { experimentQueries[platform.value] = value }
+})
+
 const tabs = [
   { key: 'run', label: '运行', icon: 'i-heroicons-play' },
   { key: 'issues', label: '问题', icon: 'i-heroicons-exclamation-triangle' },
-  { key: 'logs', label: '日志', icon: 'i-heroicons-document-text' }
+  { key: 'logs', label: '日志', icon: 'i-heroicons-document-text' },
+  { key: 'device', label: '设备', icon: 'i-heroicons-device-phone-mobile' }
 ]
 
 const platformTabs = [
@@ -190,6 +202,64 @@ const deviceAlert = computed(() => {
   return null
 })
 
+const deviceExperimentRows = computed(() => {
+  const context = deviceContext.value
+  if (!context) return []
+  return [
+    ...context.app.experiments,
+    ...context.app.outExperiments
+  ]
+})
+
+const filteredDeviceExperiments = computed(() => {
+  const query = experimentQuery.value.trim().toLowerCase()
+  if (!query) return deviceExperimentRows.value
+  return deviceExperimentRows.value.filter((experiment) =>
+    experiment.key.toLowerCase().includes(query)
+    || experiment.group.toLowerCase().includes(query)
+    || experiment.experimentId.toLowerCase().includes(query)
+  )
+})
+
+const deviceContextState = computed(() => {
+  if (deviceContextLoading.value) return { label: '读取中', color: 'blue' as const }
+  if (deviceContextError.value) return { label: '读取失败', color: 'red' as const }
+  if (!deviceContext.value?.app.available) return { label: '仅设备信息', color: 'amber' as const }
+  if (deviceContext.value.cached) return { label: '缓存', color: 'gray' as const }
+  return { label: '已读取', color: 'green' as const }
+})
+
+const environmentBadge = computed(() => {
+  const name = deviceContext.value?.app.environment.name
+  if (name === 'test') return { label: '测试环境', color: 'amber' as const }
+  if (name === 'production') return { label: '线上环境', color: 'green' as const }
+  return { label: '环境未知', color: 'gray' as const }
+})
+
+const deviceContextCopyText = computed(() => {
+  const context = deviceContext.value
+  if (!context) return ''
+  const experiments = deviceExperimentRows.value.map((experiment) =>
+    `${experiment.state === 'out' ? '[出组] ' : '[进组] '}${experiment.key} -> ${experiment.group}`
+  )
+  return [
+    `Platform: ${context.platform}`,
+    `Project: ${context.projectName || '-'}`,
+    `Device: ${context.device.name || '-'} (${context.device.udid || '-'})`,
+    `Model: ${context.device.model || '-'}`,
+    `OS: ${context.device.os || '-'}`,
+    `Build: ${context.device.buildConfiguration}`,
+    `Environment: ${context.app.environment.name}`,
+    `Site: ${context.app.environment.site || '-'}`,
+    `Country: ${context.app.environment.country || '-'}`,
+    `App device_id: ${context.app.ids.deviceId || '-'}`,
+    `Distinct ID: ${context.app.ids.distinctId || '-'}`,
+    `Snapshot: ${context.app.snapshotAt || '-'}`,
+    '',
+    ...experiments
+  ].join('\n')
+})
+
 const filteredEvents = computed(() => {
   const filter = selectedFilter.value
   let queryPattern: RegExp | null = null
@@ -231,6 +301,10 @@ const runDotClass = computed(() => {
   if (jobResult.value === 'success') return 'run-dot success'
   return 'run-dot'
 })
+
+const hasActiveJobs = computed(() =>
+  Object.values(runners).some(current => current.busy.value)
+)
 
 const firstError = computed(() => errors.value.at(-1)?.text || '')
 const latestEvents = computed(() => events.value.slice(-80))
@@ -275,6 +349,10 @@ async function initializePlatform(key: PlatformKey) {
   }
 }
 
+async function loadCurrentDeviceContext(refresh = false) {
+  await runner.value.loadDeviceContext(buildConfiguration.value, refresh)
+}
+
 async function refreshAllStatus() {
   await Promise.all(Object.values(runners).map(current => current.refreshStatus()))
 }
@@ -292,7 +370,10 @@ async function initialize() {
 async function handleDeviceChange(value: any) {
   if (!value?.udid) return
   const device = physicalDevices.value.find(item => item.udid === value.udid)
-  if (device?.available) await runner.value.selectDevice(device).catch(() => {})
+  if (device?.available) {
+    await runner.value.selectDevice(device).catch(() => {})
+    if (activeTab.value === 'device') await loadCurrentDeviceContext(true)
+  }
 }
 
 async function refreshCurrentDevices() {
@@ -311,6 +392,7 @@ async function refreshCurrentDevices() {
       selectedDevices[platform.value] = deviceOptionsFor(platform.value)
         .find(option => option.udid === preferred.udid) || null
       await runner.value.selectDevice(preferred).catch(() => {})
+      if (activeTab.value === 'device') await loadCurrentDeviceContext(true)
     } else {
       selectedDevices[platform.value] = ''
     }
@@ -360,8 +442,51 @@ function clearCurrentEvents() {
   runner.value.clearEvents()
 }
 
-function stopCurrentJob() {
-  runner.value.stopJob()
+function requestStop() {
+  if (!busy.value) return
+  stopConfirmOpen.value = true
+}
+
+async function confirmStop() {
+  if (!busy.value || stopping.value) return
+  stopping.value = true
+  try {
+    await runner.value.stopJob()
+    stopConfirmOpen.value = false
+  } finally {
+    stopping.value = false
+  }
+}
+
+function stopActiveJobsOnUnload() {
+  for (const key of ['ios', 'android'] as PlatformKey[]) {
+    const job = runners[key].activeJob.value
+    if (!job) continue
+    const payload = JSON.stringify({ jobId: job.id })
+    const sent = navigator.sendBeacon(
+      `/api/${key}/stop`,
+      new Blob([payload], { type: 'application/json' })
+    )
+    if (!sent) {
+      fetch(`/api/${key}/stop`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: payload,
+        keepalive: true
+      }).catch(() => {})
+    }
+  }
+}
+
+function handleBeforeUnload(event: BeforeUnloadEvent) {
+  if (!hasActiveJobs.value) return
+  event.preventDefault()
+  event.returnValue = ''
+}
+
+function handlePageHide(event: PageTransitionEvent) {
+  if (event.persisted || !hasActiveJobs.value) return
+  stopActiveJobsOnUnload()
 }
 
 function searchCurrentLogs() {
@@ -416,13 +541,23 @@ function handleShortcut(event: KeyboardEvent) {
     clearCurrentEvents()
   } else if (key === '.') {
     event.preventDefault()
-    stopCurrentJob()
+    requestStop()
   }
 }
+
+watch(activeTab, (tab) => {
+  if (tab === 'device') loadCurrentDeviceContext()
+})
+
+watch(buildConfiguration, () => {
+  if (activeTab.value === 'device') loadCurrentDeviceContext(true)
+})
 
 onMounted(() => {
   initialize()
   window.addEventListener('keydown', handleShortcut)
+  window.addEventListener('beforeunload', handleBeforeUnload)
+  window.addEventListener('pagehide', handlePageHide)
 })
 
 onBeforeUnmount(() => {
@@ -430,6 +565,8 @@ onBeforeUnmount(() => {
   if (deviceTimer) clearInterval(deviceTimer)
   if (copyTimer) clearTimeout(copyTimer)
   window.removeEventListener('keydown', handleShortcut)
+  window.removeEventListener('beforeunload', handleBeforeUnload)
+  window.removeEventListener('pagehide', handlePageHide)
 })
 </script>
 
@@ -632,7 +769,7 @@ onBeforeUnmount(() => {
             class="stop-button"
             block
             :disabled="!busy"
-            @click="stopCurrentJob"
+            @click="requestStop"
           >
             停止任务
             <kbd class="shortcut-key">⌘.</kbd>
@@ -640,7 +777,10 @@ onBeforeUnmount(() => {
 
           <div class="sidebar-tip">
             <UIcon name="i-heroicons-command-line" />
-            <span><kbd>⌘F</kbd> 过滤 · <kbd>⌘.</kbd> 停止</span>
+            <span>
+              <kbd>⌘F</kbd> 过滤 · <kbd>⌘.</kbd> 停止<br>
+              <span class="sidebar-tip-note">刷新或关闭页面会自动停止任务</span>
+            </span>
           </div>
         </aside>
 
@@ -881,7 +1021,7 @@ onBeforeUnmount(() => {
               />
             </section>
 
-            <section v-else class="pane">
+            <section v-else-if="activeTab === 'logs'" class="pane">
               <div class="pane-toolbar log-search">
                 <LogFilterSelect
                   v-model="selectedFilter"
@@ -940,6 +1080,238 @@ onBeforeUnmount(() => {
               </div>
               <div v-if="logs.length" class="log-meta">{{ logMeta }}</div>
             </section>
+
+            <section v-else class="pane device-context-pane">
+              <div class="pane-toolbar">
+                <div class="run-status">
+                  <UIcon name="i-heroicons-device-phone-mobile" />
+                  <span>设备上下文</span>
+                  <UBadge :color="deviceContextState.color" variant="subtle">
+                    {{ deviceContextState.label }}
+                  </UBadge>
+                </div>
+                <div class="toolbar-spacer" />
+                <UInput
+                  v-model="experimentQuery"
+                  icon="i-heroicons-magnifying-glass"
+                  placeholder="搜索实验 key、分组或 ID"
+                  class="experiment-filter"
+                />
+                <UTooltip text="重新读取 App 缓存">
+                  <UButton
+                    color="gray"
+                    variant="ghost"
+                    icon="i-heroicons-arrow-path"
+                    square
+                    :loading="deviceContextLoading"
+                    aria-label="重新读取设备上下文"
+                    @click="loadCurrentDeviceContext(true)"
+                  />
+                </UTooltip>
+                <UTooltip text="复制设备与 AB 上下文">
+                  <UButton
+                    color="gray"
+                    variant="ghost"
+                    square
+                    :icon="copiedTarget === 'device-context' ? 'i-heroicons-check' : 'i-heroicons-clipboard'"
+                    :disabled="!deviceContext"
+                    aria-label="复制设备与 AB 上下文"
+                    @click="copyText('device-context', deviceContextCopyText)"
+                  />
+                </UTooltip>
+              </div>
+
+              <AppEmptyState
+                v-if="deviceContextLoading && !deviceContext"
+                class="pane-body"
+                icon="i-heroicons-arrow-path"
+                title="正在读取设备上下文"
+                description="正在读取 App 已保存的环境、身份和设备缓存。"
+              />
+              <AppEmptyState
+                v-else-if="deviceContextError && !deviceContext"
+                class="pane-body"
+                icon="i-heroicons-exclamation-triangle"
+                title="设备上下文读取失败"
+                :description="deviceContextError"
+              >
+                <UButton
+                  color="gray"
+                  variant="soft"
+                  icon="i-heroicons-arrow-path"
+                  @click="loadCurrentDeviceContext(true)"
+                >
+                  重试
+                </UButton>
+              </AppEmptyState>
+              <AppEmptyState
+                v-else-if="!deviceContext"
+                class="pane-body"
+                icon="i-heroicons-device-phone-mobile"
+                title="尚未读取设备"
+                description="连接并选择设备后，这里会显示 App 环境、设备 ID 和 AB 分组。"
+              />
+
+              <div v-else class="device-context-body pane-body">
+                <div class="context-summary-grid">
+                  <UCard>
+                    <template #header>
+                      <div class="context-card-heading">
+                        <span>设备</span>
+                        <UBadge :color="deviceContext.device.connected ? 'green' : 'red'" variant="subtle">
+                          {{ deviceContext.device.connected ? '已连接' : '未连接' }}
+                        </UBadge>
+                      </div>
+                    </template>
+                    <div class="context-fields">
+                      <div class="context-field">
+                        <span>设备</span>
+                        <code>{{ deviceContext.device.name || '-' }}</code>
+                      </div>
+                      <div class="context-field">
+                        <span>UDID</span>
+                        <code>{{ deviceContext.device.udid || '-' }}</code>
+                        <UButton
+                          v-if="deviceContext.device.udid"
+                          color="gray"
+                          variant="ghost"
+                          size="xs"
+                          square
+                          :icon="copiedTarget === 'device-udid' ? 'i-heroicons-check' : 'i-heroicons-clipboard'"
+                          aria-label="复制设备 UDID"
+                          @click="copyText('device-udid', deviceContext.device.udid)"
+                        />
+                      </div>
+                      <div class="context-field">
+                        <span>型号 / 系统</span>
+                        <code>{{ deviceContext.device.model || '-' }} · {{ platformName }} {{ deviceContext.device.os || '?' }}</code>
+                      </div>
+                      <div class="context-field">
+                        <span>构建配置</span>
+                        <code>{{ deviceContext.device.buildConfiguration }}</code>
+                      </div>
+                    </div>
+                  </UCard>
+
+                  <UCard>
+                    <template #header>
+                      <div class="context-card-heading">
+                        <span>运行环境</span>
+                        <UBadge :color="environmentBadge.color" variant="subtle">
+                          {{ environmentBadge.label }}
+                        </UBadge>
+                      </div>
+                    </template>
+                    <div class="context-fields">
+                      <div class="context-field">
+                        <span>站点</span>
+                        <code>{{ deviceContext.app.environment.site || '-' }}</code>
+                      </div>
+                      <div class="context-field">
+                        <span>地区</span>
+                        <code>{{ deviceContext.app.environment.country || '-' }}</code>
+                      </div>
+                      <div class="context-field">
+                        <span>App device_id</span>
+                        <code>{{ deviceContext.app.ids.deviceId || '-' }}</code>
+                        <UButton
+                          v-if="deviceContext.app.ids.deviceId"
+                          color="gray"
+                          variant="ghost"
+                          size="xs"
+                          square
+                          :icon="copiedTarget === 'app-device-id' ? 'i-heroicons-check' : 'i-heroicons-clipboard'"
+                          aria-label="复制 App device_id"
+                          @click="copyText('app-device-id', deviceContext.app.ids.deviceId)"
+                        />
+                      </div>
+                      <div class="context-field">
+                        <span>Distinct ID</span>
+                        <code>{{ deviceContext.app.ids.distinctId || '-' }}</code>
+                        <UButton
+                          v-if="deviceContext.app.ids.distinctId"
+                          color="gray"
+                          variant="ghost"
+                          size="xs"
+                          square
+                          :icon="copiedTarget === 'distinct-id' ? 'i-heroicons-check' : 'i-heroicons-clipboard'"
+                          aria-label="复制 Distinct ID"
+                          @click="copyText('distinct-id', deviceContext.app.ids.distinctId)"
+                        />
+                      </div>
+                    </div>
+                  </UCard>
+                </div>
+
+                <UAlert
+                  v-if="!deviceContext.app.available || deviceContext.app.warnings.length"
+                  color="amber"
+                  variant="soft"
+                  icon="i-heroicons-information-circle"
+                  :title="deviceContext.app.available ? '部分缓存未读取' : 'App 调试缓存不可用'"
+                  :description="deviceContext.app.warnings.join('；') || '打开 App 后再刷新。'"
+                />
+
+                <UCard class="experiment-card">
+                  <template #header>
+                    <div class="context-card-heading">
+                      <div>
+                        <span>AB 实验分组</span>
+                        <p>
+                          {{ filteredDeviceExperiments.length }} / {{ deviceExperimentRows.length }} 条
+                          <template v-if="deviceContext.app.snapshotAt"> · 快照 {{ deviceContext.app.snapshotAt }}</template>
+                        </p>
+                      </div>
+                      <UBadge color="primary" variant="subtle">
+                        {{ deviceExperimentRows.filter(item => item.state === 'in').length }} 进组
+                      </UBadge>
+                    </div>
+                  </template>
+
+                  <div v-if="filteredDeviceExperiments.length" class="experiment-list">
+                    <div
+                      v-for="experiment in filteredDeviceExperiments"
+                      :key="`${experiment.state}-${experiment.key}-${experiment.experimentId}`"
+                      class="experiment-row"
+                    >
+                      <div class="experiment-name">
+                        <code>{{ experiment.key }}</code>
+                        <span>
+                          {{ experiment.experimentId ? `Experiment ${experiment.experimentId}` : 'Sensors ABTest' }}
+                          <template v-if="experiment.controlGroup"> · 对照组</template>
+                        </span>
+                      </div>
+                      <UBadge :color="experiment.state === 'out' ? 'gray' : 'primary'" variant="subtle">
+                        {{ experiment.state === 'out' ? '出组' : '进组' }}
+                      </UBadge>
+                      <code class="experiment-group">{{ experiment.group }}</code>
+                      <UTooltip text="复制实验分组">
+                        <UButton
+                          color="gray"
+                          variant="ghost"
+                          size="xs"
+                          square
+                          :icon="copiedTarget === `experiment-${experiment.key}` ? 'i-heroicons-check' : 'i-heroicons-clipboard'"
+                          aria-label="复制实验分组"
+                          @click="copyText(`experiment-${experiment.key}`, `${experiment.key} -> ${experiment.group}`)"
+                        />
+                      </UTooltip>
+                    </div>
+                  </div>
+                  <div v-else class="experiment-empty">
+                    <UIcon name="i-heroicons-beaker" />
+                    <div>
+                      <strong>{{ deviceExperimentRows.length ? '没有匹配实验' : '暂未读取到 AB 分组' }}</strong>
+                      <p>
+                        {{ deviceExperimentRows.length
+                          ? '调整关键词后重试。'
+                          : '打开 App 实验室或触发 AB 请求，然后点击刷新。' }}
+                      </p>
+                    </div>
+                  </div>
+                </UCard>
+              </div>
+            </section>
           </div>
         </main>
       </div>
@@ -951,6 +1323,40 @@ onBeforeUnmount(() => {
         <span class="toolbar-spacer" />
         <span>App Debug 0.3</span>
       </footer>
+
+      <UModal v-model="stopConfirmOpen">
+        <UCard>
+          <template #header>
+            <div class="confirm-dialog-header">
+              <div class="confirm-dialog-icon bg-amber-50 text-amber-500 dark:bg-amber-950 dark:text-amber-400">
+                <UIcon name="i-heroicons-exclamation-triangle" />
+              </div>
+              <div>
+                <h2>确认停止当前任务？</h2>
+                <p>{{ platformName }} · {{ activeJob?.action || '正在运行' }}</p>
+              </div>
+            </div>
+          </template>
+          <p class="confirm-dialog-copy">
+            停止后会终止构建、安装或日志相关进程。未完成的输出会保留在当前页面。
+          </p>
+          <template #footer>
+            <div class="confirm-dialog-footer">
+              <UButton color="gray" variant="ghost" @click="stopConfirmOpen = false">
+                继续运行
+              </UButton>
+              <UButton
+                color="red"
+                icon="i-heroicons-stop"
+                :loading="stopping"
+                @click="confirmStop"
+              >
+                停止任务
+              </UButton>
+            </div>
+          </template>
+        </UCard>
+      </UModal>
     </div>
   </UApp>
 </template>

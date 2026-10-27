@@ -21,6 +21,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
 
+from device_context import now_iso, read_app_context
+
 BASE_DIR = Path(__file__).resolve().parent
 DIST_DIR = BASE_DIR / ".output" / "public"
 INDEX = DIST_DIR / "index.html"
@@ -46,6 +48,8 @@ PLATFORMS = {
 
 _jobs = {}
 _jobs_lock = threading.Lock()
+_device_context_lock = threading.Lock()
+_device_context_cache = {}
 
 # iOS 与 Android 分别保存设备选择，避免切换平台时互相覆盖。
 _device_lock = threading.Lock()
@@ -372,6 +376,55 @@ def platform_status(platform):
     }
 
 
+def device_context(platform, configuration="Debug", refresh=False):
+    status = platform_status(platform)
+    device = status.get("device")
+    udid = device.get("udid", "") if device else ""
+    cache_key = (platform, udid, configuration)
+    now = time.time()
+
+    if not refresh:
+        with _device_context_lock:
+            cached = _device_context_cache.get(cache_key)
+        if cached and now - cached["cachedAt"] < 12:
+            payload = dict(cached["payload"])
+            payload["cached"] = True
+            return payload
+
+    available = bool(device and device.get("available"))
+    app = read_app_context(platform, udid if available else "")
+    if device and not available:
+        app["warnings"] = ["设备当前不可用，请解锁设备并完成授权后重新检测。"]
+    payload = {
+        "schemaVersion": 1,
+        "platform": platform,
+        "collectedAt": now_iso(),
+        "source": "app_sandbox_cache",
+        "cached": False,
+        "device": {
+            **(device or {}),
+            "connected": available,
+            "buildConfiguration": configuration,
+        },
+        "project": status.get("project"),
+        "projectName": status.get("projectName"),
+        "app": app,
+    }
+    with _device_context_lock:
+        _device_context_cache[cache_key] = {
+            "cachedAt": now,
+            "payload": payload,
+        }
+        if len(_device_context_cache) > 20:
+            oldest = sorted(
+                _device_context_cache,
+                key=lambda item: _device_context_cache[item]["cachedAt"],
+            )[:len(_device_context_cache) - 20]
+            for item in oldest:
+                _device_context_cache.pop(item, None)
+    return payload
+
+
 def search_log(platform, keyword, limit=200, use_regex=False):
     """在已解码日志中检索，返回匹配行。"""
     log_file = PLATFORMS[platform]["log"]
@@ -485,6 +538,17 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, json.dumps({
                 "devices": list_devices(platform),
             }, ensure_ascii=False))
+
+        if route == ["device", "context"]:
+            params = parse_qs(urlparse(self.path).query, keep_blank_values=True)
+            configuration = (params.get("configuration") or ["Debug"])[0]
+            if configuration not in ("Debug", "Release"):
+                return self._send(400, json.dumps({"error": "configuration not allowed"}))
+            refresh = (params.get("refresh") or ["0"])[0] == "1"
+            return self._send(200, json.dumps(
+                device_context(platform, configuration, refresh),
+                ensure_ascii=False,
+            ))
 
         if route == ["log", "search"]:
             params = parse_qs(urlparse(self.path).query, keep_blank_values=True)

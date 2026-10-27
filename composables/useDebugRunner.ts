@@ -33,6 +33,48 @@ export interface DebugStatus {
   }
 }
 
+export interface DeviceContextExperiment {
+  key: string
+  group: string
+  experimentId: string
+  experimentGroupId: string
+  controlGroup: boolean
+  whiteList: boolean
+  state: 'in' | 'out'
+  source: string
+}
+
+export interface DeviceContext {
+  schemaVersion: number
+  platform: 'ios' | 'android'
+  collectedAt: string
+  source: string
+  cached: boolean
+  project?: string
+  projectName?: string
+  device: Device & {
+    connected: boolean
+    buildConfiguration: string
+  }
+  app: {
+    available: boolean
+    appId: string
+    environment: {
+      name: 'test' | 'production' | 'unknown'
+      site: string
+      country: string
+    }
+    ids: {
+      deviceId: string
+      distinctId: string
+    }
+    experiments: DeviceContextExperiment[]
+    outExperiments: DeviceContextExperiment[]
+    snapshotAt: string | null
+    warnings: string[]
+  }
+}
+
 interface JobSnapshot {
   id: string
   done: boolean
@@ -75,6 +117,9 @@ export function useDebugRunner(platform: 'ios' | 'android') {
   const apiBase = `/api/${platform}`
   const status = ref<DebugStatus | null>(null)
   const devices = ref<Device[]>([])
+  const deviceContext = ref<DeviceContext | null>(null)
+  const deviceContextLoading = ref(false)
+  const deviceContextError = ref('')
   const events = ref<DebugEvent[]>([])
   const logs = ref<Array<{ n: number, text: string }>>([])
   const logMeta = ref('尚未搜索')
@@ -144,6 +189,23 @@ export function useDebugRunner(platform: 'ios' | 'android') {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ udid: device.udid, name: device.name })
     })
+  }
+
+  async function loadDeviceContext(configuration = 'Debug', refresh = false) {
+    if (deviceContextLoading.value) return
+    deviceContextLoading.value = true
+    deviceContextError.value = ''
+    try {
+      const params = new URLSearchParams({ configuration })
+      if (refresh) params.set('refresh', '1')
+      deviceContext.value = await requestJSON<DeviceContext>(
+        `${apiBase}/device/context?${params}`
+      )
+    } catch (error) {
+      deviceContextError.value = error instanceof Error ? error.message : '读取设备上下文失败'
+    } finally {
+      deviceContextLoading.value = false
+    }
   }
 
   async function pollJob() {
@@ -232,6 +294,9 @@ export function useDebugRunner(platform: 'ios' | 'android') {
     status,
     platform,
     devices,
+    deviceContext,
+    deviceContextLoading,
+    deviceContextError,
     physicalDevices,
     connectedDevice,
     sdk,
@@ -251,6 +316,7 @@ export function useDebugRunner(platform: 'ios' | 'android') {
     refreshStatus,
     loadDevices,
     selectDevice,
+    loadDeviceContext,
     runAction,
     stopJob,
     searchLogs

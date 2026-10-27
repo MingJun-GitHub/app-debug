@@ -51,6 +51,7 @@ python3 server.py
 - 运行：实时构建和启动事件、关键字过滤、错误/警告/网络快捷筛选
 - 问题：本次运行的真实错误、源码行号和最近上下文
 - 日志：搜索设备 `decoded.log`
+- 设备：读取 App 已有的环境、神策设备 ID、Distinct ID 和 AB 进组/出组缓存
 - 运行配置：设备选择、Debug/Release、构建、安装、启动和拉日志
 - 设备支持手动重新检测，插入设备后无需等待自动轮询
 - 实时日志支持“分类预设 + 二次关键词”两级筛选
@@ -71,6 +72,13 @@ python3 server.py
 筛选下拉支持搜索和直接创建。点击旁边的设置按钮可以新增、编辑或删除自定义筛选；自定义项保存在浏览器 `localStorage`。
 
 关键词输入框用于在当前分类中继续缩小结果。例如选择“网络请求”后输入 `checkout`，只会保留请求日志中匹配 `checkout` 的行。
+
+## 任务安全
+
+- 停止运行中的任务会先弹出二次确认，说明将终止的构建、安装或日志进程
+- 有活动任务时刷新或关闭页面会触发浏览器离开确认
+- 确认离开后通过 `sendBeacon` 通知后端停止 iOS / Android 的活动任务
+- Python 服务退出时会主动停止遗留任务及其子进程
 
 ## 快捷键
 
@@ -134,6 +142,15 @@ iOS 和 Android 各自使用独立 API 前缀：
 
 - `/api/ios/*`
 - `/api/android/*`
+
+设备上下文接口：
+
+```http
+GET /api/{platform}/device/context?configuration=Debug
+GET /api/{platform}/device/context?configuration=Debug&refresh=1
+```
+
+该接口只读取设备上 App 已落盘的调试数据，不修改 iOS / Android 工程。AB 结果是本地缓存快照；需要最新分组时，先在 App 内触发实验请求，再回到“设备”页点击刷新。Android 数据读取依赖 `adb run-as`，仅适用于 Debug 包。
 
 ## 服务安全
 

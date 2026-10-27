@@ -324,6 +324,10 @@ input {
   width: 13px;
 }
 
+.sidebar-tip-note {
+  color: var(--app-faint);
+}
+
 kbd {
   padding: 1px 4px;
   border: 1px solid var(--app-border-strong);
@@ -377,9 +381,9 @@ kbd {
 
 .debug-tabs [role="tablist"] {
   width: auto !important;
-  max-width: 430px;
+  max-width: 560px;
   height: 40px !important;
-  grid-template-columns: repeat(3, minmax(100px, 1fr)) !important;
+  grid-template-columns: repeat(4, minmax(100px, 1fr)) !important;
   padding: 3px !important;
 }
 
@@ -434,6 +438,10 @@ kbd {
 
 .keyword-filter {
   width: 220px;
+}
+
+.experiment-filter {
+  width: 260px;
 }
 
 .severity-filter {
@@ -779,6 +787,202 @@ kbd {
   font: 9px var(--app-mono);
 }
 
+.confirm-dialog-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.confirm-dialog-header h2 {
+  margin: 0;
+  font-size: 15px;
+}
+
+.confirm-dialog-header p {
+  margin: 3px 0 0;
+  color: var(--app-muted);
+  font-size: 11px;
+}
+
+.confirm-dialog-icon {
+  display: grid;
+  width: 36px;
+  height: 36px;
+  flex: 0 0 36px;
+  place-items: center;
+  border-radius: 10px;
+}
+
+.confirm-dialog-icon svg {
+  width: 19px;
+  height: 19px;
+}
+
+.confirm-dialog-copy {
+  margin: 0;
+  color: var(--app-muted);
+  font-size: 12px;
+  line-height: 1.7;
+}
+
+.confirm-dialog-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.device-context-body {
+  display: flex;
+  min-height: 0;
+  flex-direction: column;
+  overflow: auto;
+  gap: 12px;
+  padding-bottom: 4px;
+}
+
+.context-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.context-card-heading {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.context-card-heading p {
+  margin: 3px 0 0;
+  color: var(--app-faint);
+  font: 9px var(--app-mono);
+  font-weight: 400;
+}
+
+.context-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+}
+
+.context-field {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: 90px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+}
+
+.context-field > span {
+  color: var(--app-faint);
+  font-size: 10px;
+}
+
+.context-field > code {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--app-text);
+  font: 10.5px var(--app-mono);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.experiment-card {
+  min-height: 250px;
+}
+
+.experiment-list {
+  overflow: hidden;
+  border: 1px solid var(--app-border);
+  border-radius: 8px;
+}
+
+.experiment-row {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: minmax(0, 1fr) 64px minmax(90px, 160px) 28px;
+  align-items: center;
+  gap: 10px;
+  border-bottom: 1px solid var(--app-border);
+  padding: 9px 11px;
+}
+
+.experiment-row:last-child {
+  border-bottom: 0;
+}
+
+.experiment-row:hover {
+  background: rgba(74, 222, 128, 0.035);
+}
+
+.experiment-name {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.experiment-name code {
+  overflow: hidden;
+  color: var(--app-text);
+  font: 10.5px var(--app-mono);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.experiment-name span {
+  overflow: hidden;
+  color: var(--app-faint);
+  font: 9px var(--app-mono);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.experiment-group {
+  overflow: hidden;
+  padding: 4px 7px;
+  border: 1px solid rgba(74, 222, 128, 0.24);
+  border-radius: 6px;
+  background: rgba(74, 222, 128, 0.07);
+  color: var(--app-primary);
+  font: 10.5px var(--app-mono);
+  text-align: center;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.experiment-empty {
+  display: flex;
+  min-height: 180px;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  color: var(--app-muted);
+  text-align: left;
+}
+
+.experiment-empty > svg {
+  width: 22px;
+  height: 22px;
+  flex: 0 0 22px;
+  color: var(--app-faint);
+}
+
+.experiment-empty strong {
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.experiment-empty p {
+  margin: 4px 0 0;
+  color: var(--app-faint);
+  font-size: 10px;
+}
+
 @media (max-width: 1080px) {
   .workspace {
     grid-template-columns: 230px minmax(0, 1fr);
@@ -798,6 +1002,10 @@ kbd {
 
   .keyword-filter {
     width: 190px;
+  }
+
+  .experiment-filter {
+    width: 220px;
   }
 
   .pane-toolbar {
@@ -871,5 +1079,32 @@ kbd {
 
   .issue-grid {
     grid-template-columns: 1fr;
+  }
+
+  .context-summary-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .experiment-filter {
+    width: 100%;
+    order: -1;
+  }
+
+  .experiment-row {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .experiment-row > :nth-child(2) {
+    justify-self: start;
+  }
+
+  .experiment-group {
+    grid-column: 1 / 2;
+    grid-row: 2;
+  }
+
+  .experiment-row > button {
+    grid-column: 2;
+    grid-row: 1 / 3;
   }
 }
