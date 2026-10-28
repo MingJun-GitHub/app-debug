@@ -5,6 +5,8 @@ import { ALL_LOG_FILTER, type LogFilter } from '~/types/log-filter'
 type PlatformKey = 'ios' | 'android'
 type TabKey = 'run' | 'issues' | 'logs' | 'device'
 type SeverityFilter = 'all' | 'error' | 'warning' | 'network'
+type HighlightPattern = { value: string, regex: boolean }
+type HighlightSegment = { text: string, highlighted: boolean }
 
 const runners = {
   ios: useDebugRunner('ios'),
@@ -265,6 +267,78 @@ const deviceContextCopyText = computed(() => {
     ...experiments
   ].join('\n')
 })
+
+const logHighlightPatterns = computed<HighlightPattern[]>(() => {
+  const patterns: HighlightPattern[] = []
+  const filterQuery = selectedFilter.value.query.trim()
+  const keyword = keywordQuery.value.trim()
+  if (filterQuery) {
+    patterns.push({ value: filterQuery, regex: selectedFilter.value.regex })
+  }
+  if (keyword) {
+    patterns.push({ value: keyword, regex: false })
+  }
+  return patterns
+})
+
+function highlightSegments(text: string, patterns: HighlightPattern[]): HighlightSegment[] {
+  if (!text || !patterns.length) return [{ text, highlighted: false }]
+
+  const ranges: Array<[number, number]> = []
+  for (const pattern of patterns) {
+    if (!pattern.value) continue
+    if (pattern.regex) {
+      try {
+        const matcher = new RegExp(pattern.value, 'gi')
+        let match: RegExpExecArray | null
+        let matched = 0
+        while ((match = matcher.exec(text)) && matched < 1000) {
+          if (!match[0].length) {
+            matcher.lastIndex += 1
+            continue
+          }
+          ranges.push([match.index, match.index + match[0].length])
+          matched += 1
+        }
+      } catch {
+        // Invalid regexes are still searchable server-side; skip only their highlight.
+      }
+      continue
+    }
+
+    const needle = pattern.value.toLowerCase()
+    const haystack = text.toLowerCase()
+    let searchFrom = 0
+    while (searchFrom < haystack.length) {
+      const index = haystack.indexOf(needle, searchFrom)
+      if (index < 0) break
+      ranges.push([index, index + needle.length])
+      searchFrom = index + Math.max(needle.length, 1)
+    }
+  }
+
+  if (!ranges.length) return [{ text, highlighted: false }]
+  ranges.sort((left, right) => left[0] - right[0])
+  const merged: Array<[number, number]> = []
+  for (const range of ranges) {
+    const previous = merged.at(-1)
+    if (previous && range[0] <= previous[1]) {
+      previous[1] = Math.max(previous[1], range[1])
+    } else {
+      merged.push([...range])
+    }
+  }
+
+  const segments: HighlightSegment[] = []
+  let cursor = 0
+  for (const [start, end] of merged) {
+    if (start > cursor) segments.push({ text: text.slice(cursor, start), highlighted: false })
+    segments.push({ text: text.slice(start, end), highlighted: true })
+    cursor = end
+  }
+  if (cursor < text.length) segments.push({ text: text.slice(cursor), highlighted: false })
+  return segments
+}
 
 const filteredEvents = computed(() => {
   const filter = selectedFilter.value
@@ -925,7 +999,15 @@ onBeforeUnmount(() => {
                             : 'i-heroicons-minus'"
                     class="event-icon"
                   />
-                  <span class="event-text">{{ event.text }}</span>
+                  <span class="event-text">
+                    <template
+                      v-for="(segment, index) in highlightSegments(event.text, logHighlightPatterns)"
+                      :key="index"
+                    >
+                      <mark v-if="segment.highlighted" class="log-highlight">{{ segment.text }}</mark>
+                      <template v-else>{{ segment.text }}</template>
+                    </template>
+                  </span>
                   <UTooltip text="复制这条日志">
                     <UButton
                       color="gray"
@@ -1099,7 +1181,15 @@ onBeforeUnmount(() => {
               <div v-else class="log-result pane-body">
                 <div v-for="line in logs" :key="line.n" class="log-line">
                   <span class="log-no">{{ line.n }}</span>
-                  <code>{{ line.text }}</code>
+                  <code>
+                    <template
+                      v-for="(segment, index) in highlightSegments(line.text, logHighlightPatterns)"
+                      :key="index"
+                    >
+                      <mark v-if="segment.highlighted" class="log-highlight">{{ segment.text }}</mark>
+                      <template v-else>{{ segment.text }}</template>
+                    </template>
+                  </code>
                   <UTooltip text="复制这条日志">
                     <UButton
                       color="gray"

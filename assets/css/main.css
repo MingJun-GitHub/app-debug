@@ -705,6 +705,14 @@ kbd {
   white-space: pre-wrap;
 }
 
+.log-highlight {
+  padding: 0 1px;
+  border-radius: 2px;
+  background: rgba(250, 204, 21, 0.28);
+  box-shadow: inset 0 -1px 0 rgba(250, 204, 21, 0.62);
+  color: #fff2a8;
+}
+
 .event-row > button {
   opacity: 0.55;
 }
