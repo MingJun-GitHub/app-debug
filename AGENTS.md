@@ -14,8 +14,10 @@ iOS 与 Android 必须保持隔离：切换平台时，另一平台的设备选�
 | `composables/useDebugRunner.ts` | 设备、任务、日志、设备上下文的 API 状态 |
 | `server.py` | 本地 HTTP API、静态页面托管、任务进程管理 |
 | `device_context.py` | iOS plist / NSKeyedArchiver 和 Android `run-as` / MMKV / SharedPreferences 读取 |
+| `project_settings.py` | 本机项目目录持久化、项目结构校验和 Git 元数据读取 |
 | `run163.sh`、`runandroid.sh` | 两端的构建、安装、启动、日志和环境检查 |
 | `tests/test_device_context.py` | 设备上下文解析测试 |
+| `tests/test_project_settings.py` | 项目关联、校验和分支读取测试 |
 | `App Debug.app`、`Stop App Debug.app` | macOS 一键启动/停止本地服务并打开浏览器 |
 | `Start App Debug.command` | 在终端前台启动服务，首次缺少依赖或构建产物时自动准备 |
 
@@ -29,6 +31,7 @@ iOS 与 Android 必须保持隔离：切换平台时，另一平台的设备选�
 - `设备`：展示 UDID、型号、系统、Debug/Release、测试/线上环境、站点、国家、`device_id`、`distinctId`，以及 AB 进组/出组结果。
 - 每个平台同时最多运行一个任务。停止任务需要二次确认；页面离开时会通知后端终止活动任务。
 - 设备上下文读取失败时返回部分数据，不能阻塞设备选择或影响其他调试功能。
+- 顶部项目名称打开“项目设置”，可关联 iOS/Android 目录并查看分支、提交和工作区状态。
 
 ## 设备上下文来源
 
@@ -52,6 +55,14 @@ iOS 与 Android 必须保持隔离：切换平台时，另一平台的设备选�
 Android 完整上下文仅适用于 Debug 包。Release 包通常无法使用 `run-as`，此时返回设备信息并标记 App 上下文不可用。
 
 AB 结果是本地缓存快照。实验状态变化后，应先在 App 内触发 AB 请求，再点击“设备”页的刷新按钮。
+
+## 项目目录设置
+
+- 设置默认保存在 `~/Library/Application Support/App Debug/settings.json`。
+- `APP_DEBUG_SETTINGS` 可覆盖设置文件位置。
+- 保存前校验 iOS 的 workspace/project 或 Android 的 `gradlew` 和 Gradle settings 文件。
+- 修改关联目录时，对应平台不能有活动任务。
+- 项目路径属于用户本机配置，禁止写入仓库或作为默认示例提交。
 
 ## 开发与验证
 

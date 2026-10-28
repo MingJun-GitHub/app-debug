@@ -124,6 +124,209 @@ input {
   gap: 7px;
 }
 
+.project-branch {
+  display: inline-flex;
+  max-width: 180px;
+  align-items: center;
+  gap: 4px;
+  overflow: hidden;
+  padding: 2px 6px;
+  border: 1px solid rgba(74, 222, 128, 0.22);
+  border-radius: 5px;
+  color: #86efac;
+  font: 9px var(--app-mono);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.settings-modal-head {
+  display: flex;
+  min-width: 0;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.settings-modal-head h2 {
+  margin: 0;
+  font-size: 17px;
+}
+
+.settings-modal-head p {
+  margin: 5px 0 0;
+  color: var(--app-muted);
+  font-size: 11px;
+}
+
+.settings-body {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.settings-project-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.settings-project {
+  min-width: 0;
+  border: 1px solid var(--app-border);
+  border-radius: 10px;
+  background: rgba(9, 12, 17, 0.52);
+  padding: 14px;
+}
+
+.settings-project-head,
+.settings-project-title,
+.settings-path-actions,
+.settings-footer {
+  display: flex;
+  align-items: center;
+}
+
+.settings-project-head {
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.settings-project-title {
+  min-width: 0;
+  gap: 9px;
+}
+
+.settings-project-title > div:last-child {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.settings-project-title strong {
+  font-size: 12px;
+}
+
+.settings-project-title span {
+  overflow: hidden;
+  color: var(--app-faint);
+  font-size: 9px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.settings-platform-icon {
+  display: grid;
+  width: 30px;
+  height: 30px;
+  flex: 0 0 30px;
+  place-items: center;
+  border: 1px solid var(--app-border);
+  border-radius: 8px;
+  background: var(--app-surface-soft);
+}
+
+.settings-platform-icon svg {
+  width: 17px;
+  height: 17px;
+}
+
+.settings-platform-icon.ios {
+  color: #e5e7eb;
+}
+
+.settings-platform-icon.android {
+  color: #86efac;
+}
+
+.settings-path-label {
+  display: block;
+  margin: 15px 0 6px;
+  color: var(--app-muted);
+  font-size: 10px;
+}
+
+.settings-path-input {
+  width: 100%;
+}
+
+.settings-path-actions {
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.settings-meta {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.settings-meta > div {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 3px;
+  border-top: 1px solid var(--app-border);
+  padding-top: 8px;
+}
+
+.settings-meta span {
+  color: var(--app-faint);
+  font-size: 9px;
+}
+
+.settings-meta code {
+  overflow: hidden;
+  color: var(--app-text);
+  font: 9.5px var(--app-mono);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.settings-meta code.warning {
+  color: var(--app-amber);
+}
+
+.settings-message {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  margin-top: 9px;
+  color: var(--app-muted);
+  font-size: 10px;
+}
+
+.settings-message svg {
+  width: 13px;
+  height: 13px;
+  flex: 0 0 13px;
+  margin-top: 1px;
+}
+
+.settings-message.error {
+  color: var(--app-red);
+}
+
+.settings-message.warning {
+  color: var(--app-amber);
+}
+
+.settings-note {
+  margin: 0;
+  color: var(--app-faint);
+  font-size: 10px;
+  line-height: 1.6;
+}
+
+.settings-footer {
+  min-height: 28px;
+  gap: 8px;
+  color: var(--app-faint);
+  font-size: 10px;
+}
+
 .top-spacer {
   flex: 1;
 }
@@ -1078,6 +1281,10 @@ kbd {
   }
 
   .issue-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .settings-project-grid {
     grid-template-columns: 1fr;
   }
 

@@ -10,6 +10,7 @@ const runners = {
   ios: useDebugRunner('ios'),
   android: useDebugRunner('android')
 }
+const projectSettings = useProjectSettings()
 
 const platform = ref<PlatformKey>('ios')
 const activeTabIndexes = reactive<Record<PlatformKey, number>>({ ios: 0, android: 0 })
@@ -26,6 +27,7 @@ const refreshingDevices = reactive<Record<PlatformKey, boolean>>({ ios: false, a
 const copiedTarget = ref('')
 const stopConfirmOpen = ref(false)
 const stopping = ref(false)
+const settingsOpen = ref(false)
 const eventPane = ref<HTMLElement | null>(null)
 let statusTimer: ReturnType<typeof setInterval> | undefined
 let deviceTimer: ReturnType<typeof setInterval> | undefined
@@ -50,6 +52,10 @@ const jobDone = computed(() => runner.value.jobDone.value)
 const jobResult = computed(() => runner.value.jobResult.value)
 const elapsed = computed(() => runner.value.elapsed.value)
 const busy = computed(() => runner.value.busy.value)
+const projectConnection = computed(() =>
+  projectSettings.settings.value?.projects[platform.value] || null
+)
+const projectBranch = computed(() => projectConnection.value?.git.branch || '')
 
 const selectedDevice = computed({
   get: () => selectedDevices[platform.value],
@@ -361,8 +367,23 @@ async function loadAllDevices() {
   await Promise.all(Object.values(runners).map(current => current.loadDevices()))
 }
 
+async function handleSettingsUpdated() {
+  await projectSettings.refresh()
+  for (const current of Object.values(runners)) {
+    current.deviceContext.value = null
+  }
+  await Promise.all(Object.values(runners).flatMap(current => [
+    current.refreshStatus(),
+    current.loadDevices()
+  ]))
+}
+
 async function initialize() {
-  await Promise.all([initializePlatform('ios'), initializePlatform('android')])
+  await Promise.all([
+    initializePlatform('ios'),
+    initializePlatform('android'),
+    projectSettings.refresh()
+  ])
   statusTimer = setInterval(refreshAllStatus, 5000)
   deviceTimer = setInterval(loadAllDevices, 30000)
 }
@@ -603,8 +624,18 @@ onBeforeUnmount(() => {
         </UTabs>
 
         <div class="context-bar">
-          <UButton color="gray" variant="ghost" icon="i-heroicons-cube">
-            {{ projectName }}
+          <UButton
+            color="gray"
+            variant="ghost"
+            icon="i-heroicons-cube"
+            title="关联本地项目"
+            @click="settingsOpen = true"
+          >
+            <span>{{ projectName }}</span>
+            <span v-if="projectBranch" class="project-branch">
+              <UIcon name="i-heroicons-git-branch" />
+              {{ projectBranch }}
+            </span>
           </UButton>
         </div>
 
@@ -1361,6 +1392,11 @@ onBeforeUnmount(() => {
           </template>
         </UCard>
       </UModal>
+
+      <ProjectSettingsModal
+        v-model="settingsOpen"
+        @updated="handleSettingsUpdated"
+      />
     </div>
   </UApp>
 </template>

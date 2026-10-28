@@ -22,6 +22,13 @@ from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
 
 from device_context import now_iso, read_app_context
+from project_settings import (
+    apply_settings,
+    load_settings,
+    project_info,
+    settings_payload,
+    update_project_path,
+)
 
 BASE_DIR = Path(__file__).resolve().parent
 DIST_DIR = BASE_DIR / ".output" / "public"
@@ -45,6 +52,10 @@ PLATFORMS = {
         "name": "Bloomchic Android",
     },
 }
+
+_settings_lock = threading.Lock()
+_settings, _settings_error = load_settings()
+apply_settings(PLATFORMS, _settings)
 
 _jobs = {}
 _jobs_lock = threading.Lock()
@@ -213,6 +224,75 @@ def stop_all_jobs():
         stop_job(job)
     for job in active:
         job.completed.wait(timeout=4)
+
+
+def current_settings_payload(reload=False):
+    global _settings, _settings_error
+    with _settings_lock:
+        if reload:
+            _settings, _settings_error = load_settings()
+            apply_settings(PLATFORMS, _settings)
+        snapshot = settings_payload(_settings, load_error=_settings_error)
+    return snapshot
+
+
+def save_project_setting(platform, path):
+    global _settings, _settings_error
+    with _jobs_lock:
+        active = [
+            job for job in _jobs.values()
+            if job.platform == platform and not job.done
+        ]
+    if active:
+        raise RuntimeError(f"该平台已有任务在运行: {active[0].action}")
+
+    with _settings_lock:
+        _settings, info = update_project_path(_settings, platform, path)
+        _settings_error = None
+        apply_settings(PLATFORMS, _settings)
+        with _device_context_lock:
+            for cache_key in list(_device_context_cache):
+                if cache_key[0] == platform:
+                    _device_context_cache.pop(cache_key, None)
+        snapshot = settings_payload(_settings, load_error=None)
+    return snapshot, info
+
+
+def pick_project_directory(platform):
+    if os.uname().sysname != "Darwin":
+        raise RuntimeError("当前系统不支持原生目录选择，请手动输入路径。")
+    path = PLATFORMS[platform]["project"]
+    default_path = path if path.exists() else Path.home()
+    prompt = f"选择 {platform.upper()} 项目目录"
+    script = [
+        "on run argv",
+        "try",
+        "set chosenFolder to choose folder with prompt (item 1 of argv) "
+        "default location (POSIX file (item 2 of argv))",
+        "return POSIX path of chosenFolder",
+        "on error number -128",
+        'return ""',
+        "end try",
+        "end run",
+    ]
+    command = ["osascript"]
+    for line in script:
+        command.extend(["-e", line])
+    command.extend([prompt, str(default_path)])
+    result = subprocess.run(
+        command,
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    if result.returncode != 0:
+        raise RuntimeError((result.stderr or result.stdout).strip() or "目录选择失败")
+    selected = result.stdout.strip()
+    return {
+        "cancelled": not bool(selected),
+        "path": selected,
+        "project": project_info(platform, selected) if selected else None,
+    }
 
 
 def latest_ios_sdk():
@@ -521,6 +601,12 @@ class Handler(BaseHTTPRequestHandler):
             return self._serve_static(path)
 
         parts = [part for part in path.split("/") if part]
+        if parts == ["api", "settings"]:
+            return self._send(200, json.dumps(
+                current_settings_payload(reload=True),
+                ensure_ascii=False,
+            ))
+
         if len(parts) >= 3 and parts[1] in PLATFORMS:
             platform = parts[1]
             route = parts[2:]
@@ -598,6 +684,34 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(400, json.dumps({"error": "invalid json"}))
 
         parts = [part for part in path.split("/") if part]
+        if parts == ["api", "settings", "project"]:
+            platform = str(payload.get("platform", "")).strip()
+            path_value = str(payload.get("path", "")).strip()
+            if platform not in PLATFORMS:
+                return self._send(400, json.dumps({"error": "platform not allowed"}))
+            if not path_value:
+                return self._send(400, json.dumps({"error": "项目目录不能为空"}))
+            try:
+                settings, info = save_project_setting(platform, path_value)
+            except RuntimeError as exc:
+                return self._send(409, json.dumps({"error": str(exc)}, ensure_ascii=False))
+            except ValueError as exc:
+                return self._send(400, json.dumps({"error": str(exc)}, ensure_ascii=False))
+            return self._send(200, json.dumps({
+                "settings": settings,
+                "project": info,
+            }, ensure_ascii=False))
+
+        if parts == ["api", "settings", "pick-directory"]:
+            platform = str(payload.get("platform", "")).strip()
+            if platform not in PLATFORMS:
+                return self._send(400, json.dumps({"error": "platform not allowed"}))
+            try:
+                result = pick_project_directory(platform)
+            except RuntimeError as exc:
+                return self._send(501, json.dumps({"error": str(exc)}, ensure_ascii=False))
+            return self._send(200, json.dumps(result, ensure_ascii=False))
+
         if len(parts) >= 3 and parts[1] in PLATFORMS:
             platform = parts[1]
             route = parts[2:]
