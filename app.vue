@@ -1319,7 +1319,7 @@ onBeforeUnmount(() => {
                       <UBadge :color="experiment.state === 'out' ? 'gray' : 'primary'" variant="subtle">
                         {{ experiment.state === 'out' ? '出组' : '进组' }}
                       </UBadge>
-                      <code class="experiment-group">{{ experiment.group }}</code>
+                      <code class="experiment-group">{{ experiment.group || '-' }}</code>
                       <UTooltip text="复制实验分组">
                         <UButton
                           color="gray"

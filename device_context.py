@@ -23,6 +23,8 @@ ANDROID_PACKAGE = "com.bloomchic.app"
 
 IOS_PREFERENCES = "Library/Preferences/com.bloomchic.shopify.plist"
 IOS_AB_RESULTS = "Library/sensorsanalytics-abtest-SensorsABTestExperimentResultsResponseData.plist"
+IOS_SENSORS_DISTINCT_ID = "Library/sensorsanalytics-distinct_id.plist"
+IOS_SITE_CONFIG_KEY = "bc.persistent.BCSiteConfigTable.CurUserSelectSiteConfig"
 
 
 def now_iso() -> str:
@@ -177,12 +179,15 @@ def _parse_sensor_payload(
                 or "unknown"
             )
             row = _experiment_from_dict(key, item, state=state, source=source)
-            if row["key"] and row["group"]:
+            if row["key"] and (row["group"] or state == "out"):
                 target.append(row)
 
     add_items(payload.get("results") or payload.get("experiments"), "in", experiments)
     add_items(
-        payload.get("outResults") or payload.get("out_results") or payload.get("outList"),
+        payload.get("outResults")
+        or payload.get("out_results")
+        or payload.get("out_list")
+        or payload.get("outList"),
         "out",
         out_experiments,
     )
@@ -227,7 +232,7 @@ def parse_ios_ab_archive(blob: bytes) -> dict[str, Any]:
         for key, raw in out_results.items():
             if isinstance(raw, dict):
                 row = _experiment_from_dict(str(key), raw, state="out")
-                if row["group"]:
+                if row["key"]:
                     out_experiments.append(row)
 
     response_object = root.get("responseObject")
@@ -253,6 +258,43 @@ def parse_ios_ab_archive(blob: bytes) -> dict[str, Any]:
     }
 
 
+def parse_ios_sensor_distinct_id(blob: bytes) -> str:
+    """Read the Sensors SDK's standalone distinct_id archive."""
+    value = _decode_ns_keyed_archive(blob)
+    if isinstance(value, bytes):
+        value = value.decode("utf-8", errors="replace")
+    if isinstance(value, str):
+        return value.strip()
+    if isinstance(value, dict):
+        return _text(value.get("distinct_id") or value.get("distinctId")).strip()
+    return ""
+
+
+def _parse_ios_site_config(value: Any) -> str:
+    if isinstance(value, bytes):
+        try:
+            value = _decode_ns_keyed_archive(value)
+        except Exception:  # noqa: BLE001
+            return ""
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except (TypeError, json.JSONDecodeError):
+            return ""
+    if not isinstance(value, dict):
+        return ""
+
+    show_name = _text(value.get("show_name")).strip()
+    if show_name:
+        return show_name
+    return {
+        "SPUS": "Shopify-US",
+        "SPUK": "Shopify-UK",
+        "SPEU": "Shopify-EU",
+        "SPAU": "Shopify-AU",
+    }.get(_text(value.get("site_code")).strip(), "")
+
+
 def parse_ios_preferences(blob: bytes) -> dict[str, Any]:
     values = plistlib.loads(blob)
     site = ""
@@ -265,10 +307,12 @@ def parse_ios_preferences(blob: bytes) -> dict[str, Any]:
         if values.get(key) is True:
             site = label
             break
+    if not site:
+        site = _parse_ios_site_config(values.get(IOS_SITE_CONFIG_KEY))
     return {
         "environment": "test" if values.get("isDebugUrlEnabled") is True else "production",
         "deviceId": _text(values.get("sensorAnonymousId")),
-        "distinctId": _text(values.get("sab_distinctId")),
+        "distinctId": _text(values.get("sab_distinctId") or values.get("kSABDistinctId")),
         "site": site,
         "country": _text(values.get("BCPrivacyRegion")),
     }
@@ -308,6 +352,8 @@ def _copy_ios_file(udid: str, source: str, destination: Path) -> str | None:
         )
         if result.returncode != 0 or not destination.exists():
             message = " ".join((result.stderr or result.stdout).split())
+            if "error 7000" in message.lower():
+                return f"未找到 iOS 文件 {source}。请打开 App 触发对应缓存后重试。"
             return f"无法读取 iOS 文件 {source}: {message[-320:]}"
         return None
     except Exception as exc:  # noqa: BLE001
@@ -318,12 +364,14 @@ def read_ios_app_context(udid: str) -> dict[str, Any]:
     warnings: list[str] = []
     prefs: dict[str, Any] = {}
     ab_data: dict[str, Any] = {}
+    sensor_distinct_id = ""
     timestamps: list[float] = []
 
     with tempfile.TemporaryDirectory(prefix="app-debug-ios-") as temp_dir:
         temp = Path(temp_dir)
         preferences_path = temp / "preferences.plist"
         ab_path = temp / "ab-results.plist"
+        distinct_id_path = temp / "sensors-distinct-id.plist"
 
         warning = _copy_ios_file(udid, IOS_PREFERENCES, preferences_path)
         if warning:
@@ -344,9 +392,18 @@ def read_ios_app_context(udid: str) -> dict[str, Any]:
             except Exception as exc:  # noqa: BLE001
                 warnings.append(f"iOS AB 缓存解析失败: {exc}")
 
+        warning = _copy_ios_file(udid, IOS_SENSORS_DISTINCT_ID, distinct_id_path)
+        if warning:
+            warnings.append(warning)
+        else:
+            try:
+                sensor_distinct_id = parse_ios_sensor_distinct_id(distinct_id_path.read_bytes())
+            except Exception as exc:  # noqa: BLE001
+                warnings.append(f"iOS Sensors Distinct ID 解析失败: {exc}")
+
     experiments = ab_data.get("experiments") or []
     out_experiments = ab_data.get("outExperiments") or []
-    available = bool(prefs or experiments or out_experiments)
+    available = bool(prefs or experiments or out_experiments or sensor_distinct_id)
     return {
         "available": available,
         "appId": IOS_APP_CONTAINER_ID,
@@ -357,7 +414,12 @@ def read_ios_app_context(udid: str) -> dict[str, Any]:
         },
         "ids": {
             "deviceId": prefs.get("deviceId") or ab_data.get("anonymousId") or "",
-            "distinctId": prefs.get("distinctId") or ab_data.get("distinctId") or "",
+            "distinctId": (
+                sensor_distinct_id
+                or prefs.get("distinctId")
+                or ab_data.get("distinctId")
+                or ""
+            ),
         },
         "experiments": experiments,
         "outExperiments": out_experiments,
