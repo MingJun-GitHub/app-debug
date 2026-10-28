@@ -7,6 +7,7 @@
     "dev": "node scripts/dev.mjs",
     "dev:ui": "nuxt dev",
     "dev:api": "python3 server.py --no-browser",
+    "serve": "python3 server.py --no-browser",
     "build": "nuxt generate",
     "preview": "nuxt preview",
     "postinstall": "nuxt prepare"

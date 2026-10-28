@@ -1,0 +1,8 @@
+#!/bin/zsh
+set -u
+
+ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"
+if [[ ! -f "$ROOT/server.py" ]]; then
+  ROOT="/Users/mingjun/Desktop/app-debug"
+fi
+exec /usr/bin/open -a Terminal "$ROOT/Start App Debug.command"

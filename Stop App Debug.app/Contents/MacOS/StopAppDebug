@@ -1,0 +1,51 @@
+#!/bin/zsh
+set -u
+
+ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"
+if [[ ! -f "$ROOT/server.py" ]]; then
+  ROOT="/Users/mingjun/Desktop/app-debug"
+fi
+PORT="${PORT:-8787}"
+
+show_dialog() {
+  APP_DEBUG_MESSAGE="$1" /usr/bin/osascript \
+    -e 'display dialog (system attribute "APP_DEBUG_MESSAGE") buttons {"好"} default button "好" with title "Stop App Debug"'
+}
+
+pids=("${(@f)$(/usr/sbin/lsof -tiTCP:"$PORT" -sTCP:LISTEN 2>/dev/null)}")
+pids=("${(@)pids:#}")
+
+if (( ${#pids} == 0 )); then
+  show_dialog "App Debug 当前没有运行。"
+  exit 0
+fi
+
+for pid in "${pids[@]}"; do
+  cwd=$(/usr/sbin/lsof -a -p "$pid" -d cwd -Fn 2>/dev/null | /usr/bin/awk '/^n/{print substr($0,2); exit}')
+  command_line=$(/bin/ps -p "$pid" -o command= 2>/dev/null)
+  if [[ "$cwd" != "$ROOT" || "$command_line" != *"server.py"* ]]; then
+    show_dialog "端口 $PORT 被其他进程占用，未执行关闭：$command_line"
+    exit 1
+  fi
+done
+
+for pid in "${pids[@]}"; do
+  /bin/kill -INT "$pid" 2>/dev/null || true
+done
+
+for attempt in {1..20}; do
+  remaining=("${(@f)$(/usr/sbin/lsof -tiTCP:"$PORT" -sTCP:LISTEN 2>/dev/null)}")
+  remaining=("${(@)remaining:#}")
+  (( ${#remaining} == 0 )) && break
+  /bin/sleep 0.2
+done
+
+remaining=("${(@f)$(/usr/sbin/lsof -tiTCP:"$PORT" -sTCP:LISTEN 2>/dev/null)}")
+remaining=("${(@)remaining:#}")
+if (( ${#remaining} > 0 )); then
+  for pid in "${remaining[@]}"; do
+    /bin/kill -TERM "$pid" 2>/dev/null || true
+  done
+fi
+
+/usr/bin/osascript -e 'display notification "本地服务已关闭" with title "App Debug"'

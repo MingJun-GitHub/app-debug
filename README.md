@@ -37,6 +37,20 @@ npm run dev:api
 npm run dev:ui
 ```
 
+只运行生产构建的本地服务：
+
+```sh
+npm run serve
+```
+
+macOS 快速入口：
+
+- 双击 `App Debug.app`：打开终端，服务未运行时自动启动，并打开 <http://127.0.0.1:8787>。
+- 双击 `Stop App Debug.app`：停止当前项目在 `8787` 上运行的本地服务。
+- 首次运行且缺少依赖或页面构建时，启动器会自动执行 `npm install` / `npm run build`。
+- `Start App Debug.command` 可直接启动并在当前终端持续运行；按 `Ctrl+C` 或关闭终端即可停止。
+- 两个 `.app` 可以拖到桌面使用；启动器会定位当前项目目录。
+
 ## 生产构建
 
 ```sh

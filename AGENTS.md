@@ -16,6 +16,8 @@ iOS 与 Android 必须保持隔离：切换平台时，另一平台的设备选�
 | `device_context.py` | iOS plist / NSKeyedArchiver 和 Android `run-as` / MMKV / SharedPreferences 读取 |
 | `run163.sh`、`runandroid.sh` | 两端的构建、安装、启动、日志和环境检查 |
 | `tests/test_device_context.py` | 设备上下文解析测试 |
+| `App Debug.app`、`Stop App Debug.app` | macOS 一键启动/停止本地服务并打开浏览器 |
+| `Start App Debug.command` | 在终端前台启动服务，首次缺少依赖或构建产物时自动准备 |
 
 本地 API 仅监听 `127.0.0.1:8787`。Nuxt 开发服务运行在 `3000`，并将 `/api` 代理到 `8787`。
 
