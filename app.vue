@@ -1,13 +1,11 @@
 <script setup lang="ts">
-import type { DebugEvent } from '~/composables/useDebugRunner'
 import { redactSensitive } from '~/composables/redaction'
 import { ALL_LOG_FILTER, type LogFilter } from '~/types/log-filter'
+import type { HighlightPattern } from '~/utils/log-highlight'
 
 type PlatformKey = 'ios' | 'android'
 type TabKey = 'run' | 'issues' | 'logs' | 'device' | 'links' | 'sessions'
 type SeverityFilter = 'all' | 'error' | 'warning' | 'network'
-type HighlightPattern = { value: string, regex: boolean }
-type HighlightSegment = { text: string, highlighted: boolean }
 
 const runners = {
   ios: useDebugRunner('ios'),
@@ -31,7 +29,9 @@ const stopConfirmOpen = ref(false)
 const stopping = ref(false)
 const settingsOpen = ref(false)
 const screenshotPreviewOpen = ref(false)
-const eventPane = ref<HTMLElement | null>(null)
+const sourceViewerOpen = ref(false)
+const sourceViewerPath = ref('')
+const sourceViewerLine = ref(1)
 let statusTimer: ReturnType<typeof setInterval> | undefined
 let deviceTimer: ReturnType<typeof setInterval> | undefined
 let copyTimer: ReturnType<typeof setTimeout> | undefined
@@ -237,65 +237,6 @@ const logHighlightPatterns = computed<HighlightPattern[]>(() => {
   return patterns
 })
 
-function highlightSegments(text: string, patterns: HighlightPattern[]): HighlightSegment[] {
-  if (!text || !patterns.length) return [{ text, highlighted: false }]
-
-  const ranges: Array<[number, number]> = []
-  for (const pattern of patterns) {
-    if (!pattern.value) continue
-    if (pattern.regex) {
-      try {
-        const matcher = new RegExp(pattern.value, 'gi')
-        let match: RegExpExecArray | null
-        let matched = 0
-        while ((match = matcher.exec(text)) && matched < 1000) {
-          if (!match[0].length) {
-            matcher.lastIndex += 1
-            continue
-          }
-          ranges.push([match.index, match.index + match[0].length])
-          matched += 1
-        }
-      } catch {
-        // Invalid regexes are still searchable server-side; skip only their highlight.
-      }
-      continue
-    }
-
-    const needle = pattern.value.toLowerCase()
-    const haystack = text.toLowerCase()
-    let searchFrom = 0
-    while (searchFrom < haystack.length) {
-      const index = haystack.indexOf(needle, searchFrom)
-      if (index < 0) break
-      ranges.push([index, index + needle.length])
-      searchFrom = index + Math.max(needle.length, 1)
-    }
-  }
-
-  if (!ranges.length) return [{ text, highlighted: false }]
-  ranges.sort((left, right) => left[0] - right[0])
-  const merged: Array<[number, number]> = []
-  for (const range of ranges) {
-    const previous = merged.at(-1)
-    if (previous && range[0] <= previous[1]) {
-      previous[1] = Math.max(previous[1], range[1])
-    } else {
-      merged.push([...range])
-    }
-  }
-
-  const segments: HighlightSegment[] = []
-  let cursor = 0
-  for (const [start, end] of merged) {
-    if (start > cursor) segments.push({ text: text.slice(cursor, start), highlighted: false })
-    segments.push({ text: text.slice(start, end), highlighted: true })
-    cursor = end
-  }
-  if (cursor < text.length) segments.push({ text: text.slice(cursor), highlighted: false })
-  return segments
-}
-
 const filteredEvents = computed(() => {
   const filter = selectedFilter.value
   let queryPattern: RegExp | null = null
@@ -344,34 +285,6 @@ const hasActiveJobs = computed(() =>
 
 const firstError = computed(() => errors.value.at(-1)?.text || '')
 const latestEvents = computed(() => events.value.slice(-80))
-const errorCopyText = computed(() => [
-  `Platform: ${platformName.value}`,
-  `Project: ${projectName.value}`,
-  `SDK: ${sdk.value || '-'}`,
-  `Device: ${connectedDevice.value?.name || '-'}`,
-  '',
-  'Errors:',
-  ...errors.value.map(event => `[${event.time}] ${event.text}`),
-  '',
-  'Source locations:',
-  ...callStack.value,
-  '',
-  'Recent context:',
-  ...latestEvents.value.map(event => `[${event.time}] ${event.text}`)
-].join('\n'))
-const logEmptyTitle = computed(() => {
-  if (logMeta.value === '尚未搜索') return '尚未搜索日志'
-  if (/不存在|失败|错误|not found/i.test(logMeta.value)) return '日志暂不可用'
-  return '没有匹配的日志'
-})
-const logEmptyDescription = computed(() => {
-  if (logMeta.value === '尚未搜索') {
-    return `输入关键字后搜索 ${platformName.value} decoded.log。`
-  }
-  if (/不存在|失败|错误|not found/i.test(logMeta.value)) return logMeta.value
-  return '调整关键字或正则条件后重试。'
-})
-
 async function initializePlatform(key: PlatformKey) {
   const current = runners[key]
   await current.refreshStatus()
@@ -466,8 +379,6 @@ async function refreshCurrentDevices() {
 async function handleRun(action: string) {
   showTab('run')
   await runner.value.runAction(action, buildConfiguration.value)
-  await nextTick()
-  if (eventPane.value) eventPane.value.scrollTop = eventPane.value.scrollHeight
 }
 
 async function copyText(target: string, text: string) {
@@ -492,13 +403,16 @@ async function copyText(target: string, text: string) {
   }, 1600)
 }
 
-function eventClass(event: DebugEvent) {
-  return `event-row event-${event.kind}`
-}
-
 function showTab(key: TabKey) {
   const index = tabs.findIndex(tab => tab.key === key)
   activeTabIndexes[platform.value] = index >= 0 ? index : 0
+}
+
+function openSourceLocation(location: string) {
+  const match = location.match(/^(.*):(\d+)$/)
+  sourceViewerPath.value = match?.[1] || location
+  sourceViewerLine.value = Number(match?.[2] || 1)
+  sourceViewerOpen.value = true
 }
 
 function clearCurrentEvents() {
@@ -891,295 +805,57 @@ onBeforeUnmount(() => {
               class="debug-tabs"
             />
 
-            <section v-if="activeTab === 'run'" class="pane">
-              <div class="pane-toolbar">
-                <div class="run-status">
-                  <span :class="runDotClass" />
-                  <span>{{ runLabel }}</span>
-                  <span v-if="busy" class="elapsed">{{ elapsed }}s</span>
-                </div>
-                <div class="severity-filter">
-                  <UButton
-                    v-for="item in severityOptions"
-                    :key="item.key"
-                    :color="severity === item.key ? 'primary' : 'gray'"
-                    :variant="severity === item.key ? 'soft' : 'ghost'"
-                    size="xs"
-                    @click="severity = item.key"
-                  >
-                    {{ item.label }}
-                    <span v-if="item.key === 'error' && errors.length" class="filter-count">{{ errors.length }}</span>
-                    <span v-else-if="item.key === 'warning' && warnings.length" class="filter-count">{{ warnings.length }}</span>
-                  </UButton>
-                </div>
-                <span class="event-summary">
-                  {{ filteredEvents.length }} / {{ events.length }} 条
-                </span>
-                <div class="toolbar-spacer" />
-                <LogFilterSelect
-                  v-model="selectedFilter"
-                  class="event-filter"
-                  placeholder="筛选实时日志 · ⌘F"
-                />
-                <UInput
-                  id="event-keyword-filter"
-                  v-model="keywordQuery"
-                  icon="i-heroicons-magnifying-glass"
-                  placeholder="二次搜索关键词"
-                  class="keyword-filter"
-                />
-                <UButton
-                  color="gray"
-                  variant="ghost"
-                  icon="i-heroicons-arrow-path"
-                  :loading="busy"
-                  :disabled="busy || !activeDeviceAvailable"
-                  @click="handleRun('log')"
-                >
-                  启动并跟随
-                  <kbd class="shortcut-key">⌘D</kbd>
-                </UButton>
-              </div>
+            <DebugRunPane
+              v-if="activeTab === 'run'"
+              :platform-name="platformName"
+              :run-dot-class="runDotClass"
+              :run-label="runLabel"
+              :busy="busy"
+              :elapsed="elapsed"
+              :events="events"
+              :filtered-events="filteredEvents"
+              :severity="severity"
+              :severity-options="severityOptions"
+              :error-count="errors.length"
+              :warning-count="warnings.length"
+              :selected-filter="selectedFilter"
+              :keyword-query="keywordQuery"
+              :active-device-available="activeDeviceAvailable"
+              :copied-target="copiedTarget"
+              :highlight-patterns="logHighlightPatterns"
+              @update:severity="severity = $event"
+              @update:selected-filter="selectedFilter = $event"
+              @update:keyword-query="keywordQuery = $event"
+              @run="handleRun"
+              @copy="copyText"
+            />
 
-              <AppEmptyState
-                v-if="!events.length"
-                class="pane-body"
-                icon="i-heroicons-command-line"
-                title="还没有运行记录"
-                :description="`点击「构建并启动」，${platformName} 日志会实时出现在这里。`"
-              />
-              <AppEmptyState
-                v-else-if="!filteredEvents.length"
-                class="pane-body"
-                icon="i-heroicons-funnel"
-                title="没有匹配记录"
-                description="调整关键字或筛选条件后重试。"
-              />
-              <div v-else ref="eventPane" class="event-console">
-                <div
-                  v-for="event in filteredEvents"
-                  :key="event.id"
-                  :class="eventClass(event)"
-                >
-                  <span class="event-time">{{ event.time }}</span>
-                  <UIcon
-                    :name="event.kind === 'error'
-                      ? 'i-heroicons-x-circle'
-                      : event.kind === 'warning'
-                        ? 'i-heroicons-exclamation-triangle'
-                        : event.kind === 'success'
-                          ? 'i-heroicons-check-circle'
-                          : event.kind === 'command'
-                            ? 'i-heroicons-chevron-right'
-                            : 'i-heroicons-minus'"
-                    class="event-icon"
-                  />
-                  <span class="event-text">
-                    <template
-                      v-for="(segment, index) in highlightSegments(event.text, logHighlightPatterns)"
-                      :key="index"
-                    >
-                      <mark v-if="segment.highlighted" class="log-highlight">{{ segment.text }}</mark>
-                      <template v-else>{{ segment.text }}</template>
-                    </template>
-                  </span>
-                  <UTooltip text="复制这条日志">
-                    <UButton
-                      color="gray"
-                      variant="ghost"
-                      size="xs"
-                      square
-                      :icon="copiedTarget === `event-${event.id}` ? 'i-heroicons-check' : 'i-heroicons-clipboard'"
-                      aria-label="复制这条运行日志"
-                      @click="copyText(`event-${event.id}`, event.text)"
-                    />
-                  </UTooltip>
-                </div>
-              </div>
-            </section>
+            <DebugIssuesPane
+              v-else-if="activeTab === 'issues'"
+              :errors="errors"
+              :call-stack="callStack"
+              :first-error="firstError"
+              :latest-events="latestEvents"
+              :job-done="jobDone"
+              :copied-target="copiedTarget"
+              @copy="copyText"
+              @view-source="openSourceLocation"
+            />
 
-            <section v-else-if="activeTab === 'issues'" class="pane">
-              <div class="pane-toolbar">
-                <div class="run-status">
-                  <UIcon name="i-heroicons-exclamation-triangle" />
-                  <span>当前问题</span>
-                </div>
-                <div class="toolbar-spacer" />
-                <UTooltip text="复制全部错误、调用栈和最近上下文">
-                  <UButton
-                    color="gray"
-                    variant="ghost"
-                    size="xs"
-                    square
-                    :icon="copiedTarget === 'all-errors' ? 'i-heroicons-check' : 'i-heroicons-clipboard'"
-                    aria-label="复制全部错误信息"
-                    :disabled="!errors.length"
-                    @click="copyText('all-errors', errorCopyText)"
-                  />
-                </UTooltip>
-                <span class="event-summary">{{ errors.length }} 个错误 · {{ callStack.length }} 个源码位置</span>
-              </div>
-              <div v-if="errors.length" class="issues-layout pane-body">
-                <UAlert
-                  color="red"
-                  variant="soft"
-                  icon="i-heroicons-exclamation-circle"
-                  title="本次运行发现错误"
-                  :description="firstError"
-                />
-
-                <div class="issue-grid">
-                  <UCard>
-                    <template #header>
-                      <div class="card-heading">
-                        <span>错误事件</span>
-                        <UBadge color="red" variant="subtle">{{ errors.length }}</UBadge>
-                      </div>
-                    </template>
-                    <div class="issue-lines">
-                      <div v-for="event in errors" :key="event.id" class="issue-line">
-                        <span class="issue-time">{{ event.time }}</span>
-                        <pre>{{ event.text }}</pre>
-                        <UTooltip text="复制这条错误">
-                          <UButton
-                            color="gray"
-                            variant="ghost"
-                            size="xs"
-                            square
-                            :icon="copiedTarget === `error-${event.id}` ? 'i-heroicons-check' : 'i-heroicons-clipboard'"
-                            aria-label="复制这条错误"
-                            @click="copyText(`error-${event.id}`, event.text)"
-                          />
-                        </UTooltip>
-                      </div>
-                    </div>
-                  </UCard>
-
-                  <UCard>
-                    <template #header>
-                      <div class="card-heading">
-                        <span>源码位置</span>
-                        <UBadge color="gray" variant="subtle">{{ callStack.length }}</UBadge>
-                      </div>
-                    </template>
-                    <div v-if="callStack.length" class="stack-list">
-                      <div
-                        v-for="(frame, index) in callStack"
-                        :key="frame"
-                        class="stack-row"
-                      >
-                        <span>{{ index + 1 }}</span>
-                        <code>{{ frame }}</code>
-                        <UTooltip text="复制源码位置">
-                          <UButton
-                            color="gray"
-                            variant="ghost"
-                            size="xs"
-                            square
-                            :icon="copiedTarget === `frame-${index}` ? 'i-heroicons-check' : 'i-heroicons-clipboard'"
-                            aria-label="复制源码位置"
-                            @click="copyText(`frame-${index}`, frame)"
-                          />
-                        </UTooltip>
-                      </div>
-                    </div>
-                    <div v-else class="small-empty">
-                      本次错误没有解析到文件行号，可切换到日志 Tab 查看完整上下文。
-                    </div>
-                  </UCard>
-                </div>
-
-                <UCard>
-                  <template #header>
-                    <div class="card-heading">
-                      <span>最近上下文</span>
-                      <span class="muted">最后 80 条</span>
-                    </div>
-                  </template>
-                  <div class="context-log">
-                    <div v-for="event in latestEvents" :key="event.id">
-                      <span>{{ event.time }}</span>
-                      <code>{{ event.text }}</code>
-                    </div>
-                  </div>
-                </UCard>
-              </div>
-              <AppEmptyState
-                v-else
-                class="pane-body"
-                icon="i-heroicons-shield-check"
-                title="当前运行没有错误"
-                :description="jobDone ? '构建和启动日志中尚未发现错误。' : '运行结束后这里会显示错误与源码位置。'"
-              />
-            </section>
-
-            <section v-else-if="activeTab === 'logs'" class="pane">
-              <div class="pane-toolbar log-search">
-                <LogFilterSelect
-                  v-model="selectedFilter"
-                  :placeholder="`搜索 ${platformName} decoded.log，例如 HttpLogging / error / request-id`"
-                  class="flex-1"
-                />
-                <UInput
-                  v-model="keywordQuery"
-                  icon="i-heroicons-magnifying-glass"
-                  placeholder="二次搜索关键词"
-                  class="keyword-filter"
-                  @keydown.enter="searchCurrentLogs"
-                />
-                <UButton
-                  icon="i-heroicons-magnifying-glass"
-                  :disabled="!selectedFilter.query && !keywordQuery.trim()"
-                  @click="searchCurrentLogs"
-                >
-                  搜索
-                </UButton>
-                <UTooltip text="复制全部搜索结果">
-                  <UButton
-                    color="gray"
-                    variant="ghost"
-                    square
-                    :icon="copiedTarget === 'all-logs' ? 'i-heroicons-check' : 'i-heroicons-clipboard'"
-                    aria-label="复制全部日志"
-                    :disabled="!logs.length"
-                    @click="copyText('all-logs', logs.map(line => line.text).join('\n'))"
-                  />
-                </UTooltip>
-              </div>
-              <AppEmptyState
-                v-if="!logs.length"
-                class="pane-body"
-                :icon="logEmptyTitle === '日志暂不可用' ? 'i-heroicons-exclamation-triangle' : 'i-heroicons-document-magnifying-glass'"
-                :title="logEmptyTitle"
-                :description="logEmptyDescription"
-              />
-              <div v-else class="log-result pane-body">
-                <div v-for="line in logs" :key="line.n" class="log-line">
-                  <span class="log-no">{{ line.n }}</span>
-                  <code>
-                    <template
-                      v-for="(segment, index) in highlightSegments(line.text, logHighlightPatterns)"
-                      :key="index"
-                    >
-                      <mark v-if="segment.highlighted" class="log-highlight">{{ segment.text }}</mark>
-                      <template v-else>{{ segment.text }}</template>
-                    </template>
-                  </code>
-                  <UTooltip text="复制这条日志">
-                    <UButton
-                      color="gray"
-                      variant="ghost"
-                      size="xs"
-                      square
-                      :icon="copiedTarget === `log-${line.n}` ? 'i-heroicons-check' : 'i-heroicons-clipboard'"
-                      aria-label="复制这条日志"
-                      @click="copyText(`log-${line.n}`, line.text)"
-                    />
-                  </UTooltip>
-                </div>
-              </div>
-              <div v-if="logs.length" class="log-meta">{{ logMeta }}</div>
-            </section>
+            <DebugLogsPane
+              v-else-if="activeTab === 'logs'"
+              :platform-name="platformName"
+              :selected-filter="selectedFilter"
+              :keyword-query="keywordQuery"
+              :logs="logs"
+              :log-meta="logMeta"
+              :copied-target="copiedTarget"
+              :highlight-patterns="logHighlightPatterns"
+              @update:selected-filter="selectedFilter = $event"
+              @update:keyword-query="keywordQuery = $event"
+              @search="searchCurrentLogs"
+              @copy="copyText"
+            />
 
             <PageLinkPanel
               v-else-if="activeTab === 'links'"
@@ -1197,6 +873,7 @@ onBeforeUnmount(() => {
               :device-available="activeDeviceAvailable"
               :busy="busy"
               @run="handleRun"
+              @view-source="openSourceLocation"
             />
 
             <DeviceContextPanel
@@ -1268,6 +945,13 @@ onBeforeUnmount(() => {
       <ProjectSettingsModal
         v-model="settingsOpen"
         @updated="handleSettingsUpdated"
+      />
+
+      <SourceViewerModal
+        v-model="sourceViewerOpen"
+        :platform="platform"
+        :path="sourceViewerPath"
+        :line="sourceViewerLine"
       />
     </div>
   </UApp>

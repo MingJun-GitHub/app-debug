@@ -13,6 +13,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   run: [action: string]
+  'view-source': [location: string]
 }>()
 
 const store = useDebugSessions(props.platform)
@@ -145,17 +146,6 @@ async function downloadDiagnostic(format: 'markdown' | 'json') {
   link.download = result.filename
   link.click()
   setTimeout(() => URL.revokeObjectURL(url), 1000)
-}
-
-async function copyLocation(location: string) {
-  try {
-    await navigator.clipboard.writeText(location)
-    copied.value = location
-    if (copiedTimer) clearTimeout(copiedTimer)
-    copiedTimer = setTimeout(() => { copied.value = '' }, 1600)
-  } catch {
-    store.error.value = '复制源码位置失败'
-  }
 }
 
 watch(() => props.currentSessionId, async (value) => {
@@ -423,17 +413,24 @@ onBeforeUnmount(() => {
                 <div
                   v-for="(location, index) in selected.analysis.sourceLocations"
                   :key="location"
-                  class="stack-row"
+                  class="stack-row source-stack-row"
                 >
                   <span>{{ index + 1 }}</span>
-                  <code>{{ location }}</code>
+                  <button
+                    type="button"
+                    class="source-location-button"
+                    :title="location"
+                    @click="emit('view-source', location)"
+                  >
+                    <code>{{ location }}</code>
+                  </button>
                   <UButton
                     color="gray"
                     variant="ghost"
                     size="xs"
                     square
-                    :icon="copied === location ? 'i-heroicons-check' : 'i-heroicons-clipboard'"
-                    @click="copyLocation(location)"
+                    icon="i-heroicons-document-magnifying-glass"
+                    @click="emit('view-source', location)"
                   />
                 </div>
               </div>

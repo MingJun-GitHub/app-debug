@@ -926,6 +926,141 @@ kbd {
   text-overflow: ellipsis;
 }
 
+.source-stack-row {
+  grid-template-columns: 22px minmax(0, 1fr) 30px;
+}
+
+.source-location-button {
+  min-width: 0;
+  border: 0;
+  background: transparent;
+  padding: 3px 0;
+  text-align: left;
+}
+
+.source-location-button:hover code {
+  color: var(--app-primary);
+  text-decoration: underline;
+}
+
+.source-location-button code {
+  display: block;
+  overflow: hidden;
+  color: #c2cee3;
+  font: 10px var(--app-mono);
+  text-overflow: ellipsis;
+}
+
+.source-viewer-head,
+.source-viewer-title,
+.source-viewer-actions,
+.source-viewer-state,
+.source-viewer-footer {
+  display: flex;
+  align-items: center;
+}
+
+.source-viewer-head {
+  min-width: 0;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.source-viewer-title {
+  min-width: 0;
+  gap: 9px;
+}
+
+.source-viewer-title > svg {
+  width: 18px;
+  height: 18px;
+  flex: 0 0 18px;
+  color: var(--app-primary);
+}
+
+.source-viewer-title > div {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.source-viewer-title span {
+  overflow: hidden;
+  color: var(--app-muted);
+  font: 9px var(--app-mono);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.source-viewer-actions {
+  flex: 0 0 auto;
+  gap: 6px;
+}
+
+.source-viewer-code {
+  max-height: min(68vh, 760px);
+  overflow: auto;
+  border: 1px solid var(--app-border);
+  border-radius: 9px;
+  background: #080b10;
+  font: 11px/1.7 var(--app-mono);
+}
+
+.source-code-row {
+  display: grid;
+  grid-template-columns: 64px minmax(0, 1fr);
+  min-width: max-content;
+  padding: 1px 12px 1px 0;
+}
+
+.source-code-row.current {
+  background: rgba(74, 222, 128, 0.1);
+  box-shadow: inset 3px 0 0 var(--app-primary);
+}
+
+.source-line-number {
+  padding-right: 14px;
+  color: #4f5b6d;
+  text-align: right;
+  user-select: none;
+}
+
+.source-code-row code {
+  color: #cbd5e1;
+  white-space: pre;
+}
+
+.source-code-row.current code,
+.source-code-row.current .source-line-number {
+  color: #e9fff0;
+}
+
+.source-viewer-state {
+  min-height: 240px;
+  justify-content: center;
+  gap: 8px;
+  color: var(--app-muted);
+}
+
+.source-viewer-state.error {
+  color: var(--app-red);
+}
+
+.source-viewer-footer {
+  min-width: 0;
+  gap: 8px;
+}
+
+.source-viewer-footer > code {
+  max-width: 70%;
+  overflow: hidden;
+  color: var(--app-faint);
+  font: 9px var(--app-mono);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .small-empty {
   padding: 20px 0;
   color: var(--app-faint);

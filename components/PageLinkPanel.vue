@@ -30,6 +30,27 @@ interface LinkResolution {
   targets: LinkTarget[]
 }
 
+interface RouteMatchItem {
+  pattern: string
+  kind: string
+  source: string
+  line: number | null
+  score: number
+  dynamic: boolean
+  missingQueryKeys: string[]
+}
+
+interface RouteMatch {
+  platform: Platform
+  input: string
+  normalized: string
+  matched: boolean
+  matchedCount: number
+  best: RouteMatchItem | null
+  matches: RouteMatchItem[]
+  warnings: string[]
+}
+
 const props = defineProps<{
   platform: Platform
   deviceName?: string
@@ -57,8 +78,12 @@ const status = ref('')
 const qrDataUrl = ref('')
 const copiedTarget = ref('')
 const pendingShortcutOpen = ref(false)
+const routeMatch = ref<RouteMatch | null>(null)
+const matchingRoute = ref(false)
+const routeMatchError = ref('')
 let resolveTimer: ReturnType<typeof setTimeout> | undefined
 let resolveSerial = 0
+let matchSerial = 0
 let copiedTimer: ReturnType<typeof setTimeout> | undefined
 
 const input = computed({
@@ -192,6 +217,35 @@ async function renderQr() {
   }
 }
 
+async function matchSelectedRoute() {
+  const target = selectedTarget.value
+  const serial = ++matchSerial
+  routeMatch.value = null
+  routeMatchError.value = ''
+  if (!target?.value) {
+    matchingRoute.value = false
+    return
+  }
+  matchingRoute.value = true
+  try {
+    const params = new URLSearchParams({ url: target.value })
+    const response = await fetch(`/api/${props.platform}/link/match?${params}`)
+    const data = await response.json()
+    if (!response.ok) throw new Error(data?.error || `HTTP ${response.status}`)
+    if (serial === matchSerial) routeMatch.value = data
+  } catch (cause) {
+    if (serial === matchSerial) {
+      routeMatchError.value = cause instanceof Error ? cause.message : '路由匹配失败'
+    }
+  } finally {
+    if (serial === matchSerial) matchingRoute.value = false
+  }
+}
+
+function sourceBaseName(path: string) {
+  return path.split('/').pop() || path
+}
+
 function openInBrowser() {
   const target = h5Target.value
   if (!target?.value) return
@@ -249,6 +303,8 @@ function clearInput() {
   input.value = ''
   pendingShortcutOpen.value = false
   resolution.value = null
+  routeMatch.value = null
+  routeMatchError.value = ''
   error.value = ''
   status.value = ''
   if (resolveTimer) clearTimeout(resolveTimer)
@@ -282,6 +338,8 @@ watch(() => props.platform, () => {
   error.value = ''
   status.value = ''
   resolution.value = null
+  routeMatch.value = null
+  routeMatchError.value = ''
   scheduleResolve()
 })
 
@@ -296,6 +354,7 @@ watch(selectedSite, () => {
 
 watch(selectedTarget, () => {
   renderQr()
+  matchSelectedRoute()
 }, { immediate: true })
 
 onMounted(() => {
@@ -412,6 +471,62 @@ onBeforeUnmount(() => {
         title="注意"
         :description="resolution.warning"
       />
+
+      <div
+        class="route-match-card"
+        :class="{
+          matched: routeMatch?.matched,
+          missing: routeMatch && !routeMatch.matched,
+          loading: matchingRoute
+        }"
+      >
+        <div class="route-match-head">
+          <div>
+            <UIcon
+              :name="matchingRoute
+                ? 'i-heroicons-arrow-path'
+                : routeMatch?.matched
+                  ? 'i-heroicons-check-circle'
+                  : 'i-heroicons-exclamation-triangle'"
+              :class="{ spinning: matchingRoute }"
+            />
+            <div>
+              <strong>
+                {{ matchingRoute
+                  ? '正在匹配现有路由'
+                  : routeMatch?.matched
+                    ? '已命中 App 现有路由'
+                    : '未命中 App 路由' }}
+              </strong>
+              <span>使用当前选中的 {{ selectedTarget?.label || '链接' }} 与仓库路由清单匹配</span>
+            </div>
+          </div>
+          <UBadge
+            v-if="routeMatch"
+            :color="routeMatch.matched ? 'green' : 'amber'"
+            variant="subtle"
+          >
+            {{ routeMatch.matchedCount }} 个匹配
+          </UBadge>
+        </div>
+
+        <div v-if="routeMatchError || (routeMatch && !routeMatch.matched)" class="route-match-message">
+          {{ routeMatchError || routeMatch?.warnings[0] || '当前链接可能回退到 WebView 或无法被 App 路由处理。' }}
+        </div>
+        <div v-else-if="routeMatch?.best" class="route-match-result">
+          <code>{{ routeMatch.best.pattern }}</code>
+          <span>
+            {{ sourceBaseName(routeMatch.best.source) }}
+            <template v-if="routeMatch.best.line">:{{ routeMatch.best.line }}</template>
+          </span>
+          <UBadge :color="routeMatch.best.dynamic ? 'gray' : 'green'" variant="subtle">
+            {{ routeMatch.best.dynamic ? '参数路由' : '精确路由' }}
+          </UBadge>
+        </div>
+        <div v-if="routeMatch?.warnings.length" class="route-match-message warning">
+          {{ routeMatch.warnings.join('；') }}
+        </div>
+      </div>
 
       <div class="link-workbench">
         <div class="link-targets">
@@ -689,6 +804,106 @@ onBeforeUnmount(() => {
 .link-input {
   min-width: 0;
   flex: 1;
+}
+
+.route-match-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  border: 1px solid var(--app-border);
+  border-radius: 10px;
+  background: rgba(16, 19, 26, 0.7);
+  padding: 10px 12px;
+}
+
+.route-match-card.matched {
+  border-color: rgba(74, 222, 128, 0.34);
+  background: rgba(74, 222, 128, 0.045);
+}
+
+.route-match-card.missing {
+  border-color: rgba(245, 190, 91, 0.36);
+  background: rgba(245, 190, 91, 0.045);
+}
+
+.route-match-head,
+.route-match-head > div,
+.route-match-result {
+  display: flex;
+  align-items: center;
+}
+
+.route-match-head {
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.route-match-head > div {
+  min-width: 0;
+  gap: 8px;
+}
+
+.route-match-head > div > svg {
+  width: 16px;
+  height: 16px;
+  flex: 0 0 16px;
+  color: var(--app-muted);
+}
+
+.route-match-card.matched .route-match-head > div > svg {
+  color: var(--app-green);
+}
+
+.route-match-card.missing .route-match-head > div > svg {
+  color: var(--app-amber);
+}
+
+.route-match-head > div > div {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.route-match-head strong {
+  font-size: 11px;
+}
+
+.route-match-head span {
+  color: var(--app-faint);
+  font-size: 9px;
+}
+
+.route-match-result {
+  min-width: 0;
+  gap: 9px;
+  border-top: 1px solid var(--app-border);
+  padding-top: 8px;
+}
+
+.route-match-result code {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  color: var(--app-text);
+  font: 9.5px var(--app-mono);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.route-match-result > span {
+  color: var(--app-faint);
+  font: 8.5px var(--app-mono);
+}
+
+.route-match-message {
+  color: var(--app-amber);
+  font-size: 9.5px;
+  line-height: 1.5;
+}
+
+.route-match-message.warning {
+  color: var(--app-faint);
 }
 
 .link-empty {

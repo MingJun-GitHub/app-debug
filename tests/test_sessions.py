@@ -5,8 +5,9 @@ from pathlib import Path
 
 from app_debug.analysis import analyze_lines, error_fingerprint, source_locations
 from app_debug.redaction import redact_data, redact_text
-from app_debug.route_inventory import route_inventory
+from app_debug.route_inventory import match_route, route_inventory
 from app_debug.sessions import SessionStore
+from app_debug.source_reader import read_source_window
 
 
 class AnalysisTest(unittest.TestCase):
@@ -146,6 +147,13 @@ class RouteInventoryTest(unittest.TestCase):
             inventory = route_inventory("android", str(project))
             self.assertEqual(inventory["count"], 1)
             self.assertEqual(inventory["routes"][0]["pattern"], "bloomchic://app/cart")
+            matched = match_route(
+                "android",
+                "bloomchic://app/cart",
+                str(project),
+            )
+            self.assertTrue(matched["matched"])
+            self.assertEqual(matched["best"]["pattern"], "bloomchic://app/cart")
 
     def test_reads_ios_router_patterns(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -159,6 +167,43 @@ class RouteInventoryTest(unittest.TestCase):
             inventory = route_inventory("ios", str(project))
             self.assertEqual(inventory["count"], 1)
             self.assertEqual(inventory["routes"][0]["pattern"], "/products/:handle")
+            matched = match_route(
+                "ios",
+                "bloomchic://app/products/sample-product",
+                str(project),
+            )
+            self.assertTrue(matched["matched"])
+
+
+class SourceReaderTest(unittest.TestCase):
+    def test_reads_project_source_window(self):
+        with tempfile.TemporaryDirectory() as temp:
+            project = Path(temp)
+            source = project / "app/src/test/Feature.kt"
+            source.parent.mkdir(parents=True)
+            source.write_text(
+                "\n".join(f"line {number}" for number in range(1, 31)),
+                encoding="utf-8",
+            )
+            result = read_source_window(
+                str(project),
+                "Feature.kt",
+                line=15,
+                context=2,
+            )
+            self.assertEqual(result["relativePath"], "app/src/test/Feature.kt")
+            self.assertEqual(result["startLine"], 13)
+            self.assertEqual(result["endLine"], 17)
+            self.assertEqual(result["lines"][2]["n"], 15)
+
+    def test_rejects_source_outside_project(self):
+        with tempfile.TemporaryDirectory() as temp:
+            project = Path(temp) / "project"
+            project.mkdir()
+            outside = Path(temp) / "outside.kt"
+            outside.write_text("secret", encoding="utf-8")
+            with self.assertRaisesRegex(FileNotFoundError, "项目目录"):
+                read_source_window(str(project), str(outside))
 
 
 if __name__ == "__main__":

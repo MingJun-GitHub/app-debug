@@ -150,6 +150,26 @@ TOOLS = [
         ["platform"],
     ),
     _tool(
+        "match_route",
+        "Check whether a Deep Link or Universal Link matches a route in the linked repository.",
+        {
+            "platform": PLATFORM_SCHEMA,
+            "url": {"type": "string"},
+        },
+        ["platform", "url"],
+    ),
+    _tool(
+        "read_source",
+        "Read a line-numbered source window inside the linked project.",
+        {
+            "platform": PLATFORM_SCHEMA,
+            "path": {"type": "string"},
+            "line": {"type": "integer", "minimum": 1},
+            "context": {"type": "integer", "minimum": 1, "maximum": 80},
+        },
+        ["platform", "path"],
+    ),
+    _tool(
         "start_action",
         "Start an existing App Debug action. Build/install/launch/log actions require confirm=true.",
         {
@@ -246,6 +266,24 @@ def _routes(arguments: dict[str, Any]) -> Any:
     return _json_request("GET", f"/api/{platform}/routes", timeout=60)
 
 
+def _match_route(arguments: dict[str, Any]) -> Any:
+    platform = arguments["platform"]
+    url = urllib.parse.quote(str(arguments["url"]), safe="")
+    return _json_request("GET", f"/api/{platform}/link/match?url={url}", timeout=60)
+
+
+def _read_source(arguments: dict[str, Any]) -> Any:
+    platform = arguments["platform"]
+    path = urllib.parse.quote(str(arguments["path"]), safe="")
+    line = max(1, int(arguments.get("line", 1)))
+    context = max(1, min(int(arguments.get("context", 14)), 80))
+    return _json_request(
+        "GET",
+        f"/api/{platform}/source?path={path}&line={line}&context={context}",
+        timeout=30,
+    )
+
+
 def _start_action(arguments: dict[str, Any]) -> Any:
     platform = arguments["platform"]
     action = arguments["action"]
@@ -314,6 +352,8 @@ HANDLERS = {
     "get_session": _session,
     "device_context": _context,
     "route_inventory": _routes,
+    "match_route": _match_route,
+    "read_source": _read_source,
     "start_action": _start_action,
     "job_status": _job,
     "open_link": _open_link,

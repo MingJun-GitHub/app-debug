@@ -20,9 +20,14 @@ iOS 与 Android 必须保持隔离：切换平台时，另一平台的设备选�
 | `app_debug/analysis.py` | 错误指纹、源码位置和验证日志分析 |
 | `app_debug/jobs.py` | 任务快照和增量输出模型 |
 | `app_debug/route_inventory.py` | 只读提取 iOS / Android 路由清单 |
+| `app_debug/source_reader.py` | 项目范围内的只读源码窗口读取 |
 | `app_debug/redaction.py` | 复制和导出前的敏感信息遮盖 |
 | `app_debug/links.py` | H5、Universal Link 和 Deep Link 纯函数 |
 | `mcp_server.py` | 本地 MCP stdio 桥接 |
+| `components/DebugRunPane.vue` | 双平台共用的运行日志面板 |
+| `components/DebugIssuesPane.vue` | 双平台共用的问题与源码定位面板 |
+| `components/DebugLogsPane.vue` | 双平台共用的日志检索面板 |
+| `components/SourceViewerModal.vue` | 项目内源码行号查看器 |
 | `run163.sh`、`runandroid.sh` | 两端的构建、安装、启动、日志和环境检查 |
 | `tests/test_device_context.py` | 设备上下文解析测试 |
 | `tests/test_project_settings.py` | 项目关联、校验和分支读取测试 |
@@ -41,6 +46,8 @@ iOS 与 Android 必须保持隔离：切换平台时，另一平台的设备选�
 - 设备上下文读取失败时返回部分数据，不能阻塞设备选择或影响其他调试功能。
 - 顶部项目名称打开“项目设置”，可关联 iOS/Android 目录并查看分支、提交和工作区状态。
 - “会话”持久化每次运行和验证，支持错误聚合、设备快照 Diff，以及脱敏 Markdown/JSON 诊断包。
+- “页面”使用仓库现有路由清单校验 H5、Universal Link 和 Deep Link 是否能够命中 App 路由。
+- 问题与会话中的源码位置可以直接打开项目内只读源码窗口。
 - App Debug 只调用两个业务仓库已有命令，不修改其源码、测试、配置或 CI。
 
 ## 设备上下文来源

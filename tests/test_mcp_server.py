@@ -22,6 +22,8 @@ class McpServerTest(unittest.TestCase):
         names = {tool["name"] for tool in tools["result"]["tools"]}
         self.assertIn("start_action", names)
         self.assertIn("get_session", names)
+        self.assertIn("match_route", names)
+        self.assertIn("read_source", names)
 
     def test_guarded_action_requires_confirmation(self):
         with self.assertRaisesRegex(RuntimeError, "confirm=true"):

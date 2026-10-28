@@ -23,8 +23,9 @@ from urllib.parse import parse_qs, unquote, urlparse
 
 from app_debug.jobs import Job
 from app_debug.links import normalize_link_url, resolve_page_links
-from app_debug.route_inventory import route_inventory
+from app_debug.route_inventory import match_route, route_inventory
 from app_debug.sessions import SessionStore
+from app_debug.source_reader import read_source_window
 from device_context import now_iso, read_app_context
 from device_tools import (
     DeviceToolError,
@@ -856,11 +857,52 @@ class Handler(BaseHTTPRequestHandler):
                 ensure_ascii=False,
             ))
 
+        if route == ["link", "match"]:
+            params = parse_qs(urlparse(self.path).query, keep_blank_values=True)
+            value = (params.get("url") or [""])[0]
+            try:
+                result = match_route(
+                    platform,
+                    value,
+                    str(PLATFORMS[platform]["project"]),
+                )
+            except ValueError as exc:
+                return self._send(400, json.dumps({"error": str(exc)}, ensure_ascii=False))
+            return self._send(200, json.dumps(result, ensure_ascii=False))
+
+        if route == ["source"]:
+            params = parse_qs(urlparse(self.path).query, keep_blank_values=True)
+            source_path = (params.get("path") or [""])[0]
+            try:
+                line = int((params.get("line") or ["1"])[0])
+                context = int((params.get("context") or ["14"])[0])
+            except ValueError:
+                return self._send(400, json.dumps({"error": "line/context must be integers"}))
+            try:
+                result = read_source_window(
+                    str(PLATFORMS[platform]["project"]),
+                    source_path,
+                    line=line,
+                    context=context,
+                )
+            except FileNotFoundError as exc:
+                return self._send(404, json.dumps({"error": str(exc)}, ensure_ascii=False))
+            except ValueError as exc:
+                return self._send(400, json.dumps({"error": str(exc)}, ensure_ascii=False))
+            except RuntimeError as exc:
+                return self._send(500, json.dumps({"error": str(exc)}, ensure_ascii=False))
+            return self._send(200, json.dumps(result, ensure_ascii=False))
+
         if route == ["link", "resolve"]:
             params = parse_qs(urlparse(self.path).query, keep_blank_values=True)
             value = (params.get("url") or [""])[0]
             try:
                 resolved = resolve_page_links(value)
+                resolved["routeMatch"] = match_route(
+                    platform,
+                    value,
+                    str(PLATFORMS[platform]["project"]),
+                )
             except ValueError as exc:
                 return self._send(400, json.dumps({"error": str(exc)}, ensure_ascii=False))
             resolved["platform"] = platform

@@ -8,7 +8,7 @@ from typing import Iterable
 
 
 _SOURCE_PATTERN = re.compile(
-    r"(?P<file>/?(?:[A-Za-z0-9_.@+-]+/)+[A-Za-z0-9_.@+-]+"
+    r"(?P<file>/?(?:[A-Za-z0-9_.@+-]+/)*[A-Za-z0-9_.@+-]+"
     r"\.(?:swift|m|mm|kt|kts|java|c|cc|cpp|h|hpp)):(?P<line>\d+)"
 )
 _UUID_PATTERN = re.compile(
