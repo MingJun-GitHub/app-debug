@@ -584,9 +584,9 @@ kbd {
 
 .debug-tabs [role="tablist"] {
   width: auto !important;
-  max-width: 560px;
+  max-width: 690px;
   height: 40px !important;
-  grid-template-columns: repeat(4, minmax(100px, 1fr)) !important;
+  grid-template-columns: repeat(5, minmax(90px, 1fr)) !important;
   padding: 3px !important;
 }
 

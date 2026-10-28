@@ -3,7 +3,7 @@ import type { DebugEvent } from '~/composables/useDebugRunner'
 import { ALL_LOG_FILTER, type LogFilter } from '~/types/log-filter'
 
 type PlatformKey = 'ios' | 'android'
-type TabKey = 'run' | 'issues' | 'logs' | 'device'
+type TabKey = 'run' | 'issues' | 'logs' | 'device' | 'links'
 type SeverityFilter = 'all' | 'error' | 'warning' | 'network'
 type HighlightPattern = { value: string, regex: boolean }
 type HighlightSegment = { text: string, highlighted: boolean }
@@ -93,7 +93,8 @@ const tabs = [
   { key: 'run', label: '运行', icon: 'i-heroicons-play' },
   { key: 'issues', label: '问题', icon: 'i-heroicons-exclamation-triangle' },
   { key: 'logs', label: '日志', icon: 'i-heroicons-document-text' },
-  { key: 'device', label: '设备', icon: 'i-heroicons-device-phone-mobile' }
+  { key: 'device', label: '设备', icon: 'i-heroicons-device-phone-mobile' },
+  { key: 'links', label: '页面', icon: 'i-heroicons-arrow-top-right-on-square' }
 ]
 
 const platformTabs = [
@@ -1205,6 +1206,13 @@ onBeforeUnmount(() => {
               </div>
               <div v-if="logs.length" class="log-meta">{{ logMeta }}</div>
             </section>
+
+            <PageLinkPanel
+              v-else-if="activeTab === 'links'"
+              :platform="platform"
+              :device-name="connectedDevice?.name"
+              :device-available="Boolean(connectedDevice?.available)"
+            />
 
             <section v-else class="pane device-context-pane">
               <div class="pane-toolbar">
