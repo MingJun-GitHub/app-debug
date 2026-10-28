@@ -120,6 +120,9 @@ export function useDebugRunner(platform: 'ios' | 'android') {
   const deviceContext = ref<DeviceContext | null>(null)
   const deviceContextLoading = ref(false)
   const deviceContextError = ref('')
+  const screenshotUrl = ref('')
+  const screenshotLoading = ref(false)
+  const screenshotError = ref('')
   const events = ref<DebugEvent[]>([])
   const logs = ref<Array<{ n: number, text: string }>>([])
   const logMeta = ref('尚未搜索')
@@ -206,6 +209,39 @@ export function useDebugRunner(platform: 'ios' | 'android') {
     } finally {
       deviceContextLoading.value = false
     }
+  }
+
+  async function captureScreenshot() {
+    if (screenshotLoading.value) return
+    screenshotLoading.value = true
+    screenshotError.value = ''
+    try {
+      const response = await fetch(`${apiBase}/device/screenshot?t=${Date.now()}`)
+      if (!response.ok) {
+        let message = `HTTP ${response.status}`
+        try {
+          const data = await response.json()
+          message = data?.error || message
+        } catch {
+          // The server may not return JSON for a device transport failure.
+        }
+        throw new Error(message)
+      }
+      const blob = await response.blob()
+      if (!blob.type.startsWith('image/')) throw new Error('服务没有返回图片')
+      if (screenshotUrl.value) URL.revokeObjectURL(screenshotUrl.value)
+      screenshotUrl.value = URL.createObjectURL(blob)
+    } catch (error) {
+      screenshotError.value = error instanceof Error ? error.message : '设备截屏失败'
+    } finally {
+      screenshotLoading.value = false
+    }
+  }
+
+  function clearScreenshot() {
+    if (screenshotUrl.value) URL.revokeObjectURL(screenshotUrl.value)
+    screenshotUrl.value = ''
+    screenshotError.value = ''
   }
 
   async function pollJob() {
@@ -297,6 +333,9 @@ export function useDebugRunner(platform: 'ios' | 'android') {
     deviceContext,
     deviceContextLoading,
     deviceContextError,
+    screenshotUrl,
+    screenshotLoading,
+    screenshotError,
     physicalDevices,
     connectedDevice,
     sdk,
@@ -317,6 +356,8 @@ export function useDebugRunner(platform: 'ios' | 'android') {
     loadDevices,
     selectDevice,
     loadDeviceContext,
+    captureScreenshot,
+    clearScreenshot,
     runAction,
     stopJob,
     searchLogs

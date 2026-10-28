@@ -30,6 +30,7 @@ const copiedTarget = ref('')
 const stopConfirmOpen = ref(false)
 const stopping = ref(false)
 const settingsOpen = ref(false)
+const screenshotPreviewOpen = ref(false)
 const eventPane = ref<HTMLElement | null>(null)
 let statusTimer: ReturnType<typeof setInterval> | undefined
 let deviceTimer: ReturnType<typeof setInterval> | undefined
@@ -42,6 +43,21 @@ const connectedDevice = computed(() => runner.value.connectedDevice.value)
 const deviceContext = computed(() => runner.value.deviceContext.value)
 const deviceContextLoading = computed(() => runner.value.deviceContextLoading.value)
 const deviceContextError = computed(() => runner.value.deviceContextError.value)
+const screenshotUrl = computed(() => runner.value.screenshotUrl.value)
+const screenshotLoading = computed(() => runner.value.screenshotLoading.value)
+const screenshotError = computed(() => runner.value.screenshotError.value)
+const activeDeviceAvailable = computed(() =>
+  Boolean(
+    connectedDevice.value?.available
+    || deviceContext.value?.device.connected
+    || physicalDevices.value.some(device => device.available)
+  )
+)
+const screenshotDeviceName = computed(() =>
+  connectedDevice.value?.name
+  || deviceContext.value?.device.name
+  || physicalDevices.value.find(device => device.available)?.name
+)
 const sdk = computed(() => runner.value.sdk.value)
 const events = computed(() => runner.value.events.value)
 const errors = computed(() => runner.value.errors.value)
@@ -434,6 +450,17 @@ async function loadCurrentDeviceContext(refresh = false) {
   await runner.value.loadDeviceContext(buildConfiguration.value, refresh)
 }
 
+async function openScreenshotPreview() {
+  if (!activeDeviceAvailable.value) return
+  screenshotPreviewOpen.value = true
+  if (!screenshotUrl.value) await runner.value.captureScreenshot()
+}
+
+async function refreshScreenshot() {
+  if (!activeDeviceAvailable.value) return
+  await runner.value.captureScreenshot()
+}
+
 async function refreshAllStatus() {
   await Promise.all(Object.values(runners).map(current => current.refreshStatus()))
 }
@@ -632,6 +659,9 @@ function handleShortcut(event: KeyboardEvent) {
     event.preventDefault()
     showTab('run')
     nextTick(() => document.querySelector<HTMLInputElement>('#event-keyword-filter')?.focus())
+  } else if (key === 's' && event.shiftKey) {
+    event.preventDefault()
+    openScreenshotPreview()
   } else if (key === 'k') {
     event.preventDefault()
     clearCurrentEvents()
@@ -646,6 +676,7 @@ watch(activeTab, (tab) => {
 })
 
 watch(platform, () => {
+  screenshotPreviewOpen.value = false
   if (activeTab.value === 'device') loadCurrentDeviceContext()
 })
 
@@ -664,6 +695,7 @@ onBeforeUnmount(() => {
   if (statusTimer) clearInterval(statusTimer)
   if (deviceTimer) clearInterval(deviceTimer)
   if (copyTimer) clearTimeout(copyTimer)
+  Object.values(runners).forEach(current => current.clearScreenshot())
   window.removeEventListener('keydown', handleShortcut)
   window.removeEventListener('beforeunload', handleBeforeUnload)
   window.removeEventListener('pagehide', handlePageHide)
@@ -818,6 +850,7 @@ onBeforeUnmount(() => {
               icon="i-heroicons-play-solid"
               class="run-primary"
               :loading="busy"
+              :disabled="busy || !activeDeviceAvailable"
               @click="handleRun('all')"
             >
               <span>构建并启动</span>
@@ -830,7 +863,7 @@ onBeforeUnmount(() => {
                 variant="ghost"
                 icon="i-heroicons-wrench-screwdriver"
                 class="shortcut-button"
-                :disabled="busy"
+                :disabled="busy || !activeDeviceAvailable"
                 @click="handleRun('build')"
               >
                 <span>构建</span>
@@ -841,7 +874,7 @@ onBeforeUnmount(() => {
                 variant="ghost"
                 icon="i-heroicons-arrow-down-tray"
                 class="shortcut-button"
-                :disabled="busy"
+                :disabled="busy || !activeDeviceAvailable"
                 @click="handleRun('install')"
               >
                 <span>安装</span>
@@ -852,7 +885,7 @@ onBeforeUnmount(() => {
                 variant="ghost"
                 icon="i-heroicons-rocket-launch"
                 class="shortcut-button"
-                :disabled="busy"
+                :disabled="busy || !activeDeviceAvailable"
                 @click="handleRun('launch')"
               >
                 <span>启动</span>
@@ -863,7 +896,7 @@ onBeforeUnmount(() => {
                 variant="ghost"
                 icon="i-heroicons-document-magnifying-glass"
                 class="shortcut-button"
-                :disabled="busy"
+                :disabled="busy || !activeDeviceAvailable"
                 @click="handleRun('logs')"
               >
                 <span>拉日志</span>
@@ -960,6 +993,7 @@ onBeforeUnmount(() => {
                   variant="ghost"
                   icon="i-heroicons-arrow-path"
                   :loading="busy"
+                  :disabled="busy || !activeDeviceAvailable"
                   @click="handleRun('log')"
                 >
                   启动并跟随
@@ -1252,6 +1286,16 @@ onBeforeUnmount(() => {
                     @click="copyText('device-context', deviceContextCopyText)"
                   />
                 </UTooltip>
+                <UButton
+                  color="gray"
+                  variant="soft"
+                  icon="i-heroicons-camera"
+                  :disabled="!activeDeviceAvailable"
+                  @click="openScreenshotPreview"
+                >
+                  截图预览
+                  <kbd class="shortcut-key">⇧⌘S</kbd>
+                </UButton>
               </div>
 
               <AppEmptyState
@@ -1490,6 +1534,16 @@ onBeforeUnmount(() => {
           </template>
         </UCard>
       </UModal>
+
+      <DeviceScreenshotEditor
+        v-model="screenshotPreviewOpen"
+        :platform="platform"
+        :device-name="screenshotDeviceName"
+        :image-url="screenshotUrl"
+        :loading="screenshotLoading"
+        :error="screenshotError"
+        @refresh="refreshScreenshot"
+      />
 
       <ProjectSettingsModal
         v-model="settingsOpen"

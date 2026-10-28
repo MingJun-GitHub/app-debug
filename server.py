@@ -22,6 +22,10 @@ from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse, urlsplit, urlunsplit
 
 from device_context import now_iso, read_app_context
+from device_tools import (
+    DeviceToolError,
+    capture_screenshot,
+)
 from project_settings import (
     apply_settings,
     load_settings,
@@ -38,6 +42,15 @@ HOST = "127.0.0.1"
 PORT = int(os.environ.get("PORT", "8787"))
 
 ALLOWED_ACTIONS = {"all", "build", "install", "launch", "log", "logs", "doctor"}
+DEVICE_REQUIRED_ACTIONS = {"all", "build", "install", "launch", "log", "logs"}
+ACTION_LABELS = {
+    "all": "构建并启动",
+    "build": "构建",
+    "install": "安装",
+    "launch": "启动",
+    "log": "启动并跟随日志",
+    "logs": "拉取日志",
+}
 PLATFORMS = {
     "ios": {
         "runner": BASE_DIR / "run163.sh",
@@ -91,6 +104,10 @@ _jobs = {}
 _jobs_lock = threading.Lock()
 _device_context_lock = threading.Lock()
 _device_context_cache = {}
+_device_command_locks = {
+    "ios": threading.Lock(),
+    "android": threading.Lock(),
+}
 
 # iOS 与 Android 分别保存设备选择，避免切换平台时互相覆盖。
 _device_lock = threading.Lock()
@@ -682,7 +699,8 @@ def device_context(platform, configuration="Debug", refresh=False):
             return payload
 
     available = bool(device and device.get("available"))
-    app = read_app_context(platform, udid if available else "")
+    with _device_command_locks[platform]:
+        app = read_app_context(platform, udid if available else "")
     if device and not available:
         app["warnings"] = ["设备当前不可用，请解锁设备并完成授权后重新检测。"]
     payload = {
@@ -713,6 +731,17 @@ def device_context(platform, configuration="Debug", refresh=False):
             for item in oldest:
                 _device_context_cache.pop(item, None)
     return payload
+
+
+def require_available_device(platform):
+    """Resolve the selected device and require it to be available."""
+    devices = list_devices(platform)
+    device = select_device(devices, platform)
+    if not device:
+        raise DeviceToolError("未检测到当前平台的设备")
+    if not device.get("available"):
+        raise DeviceToolError("设备当前不可用，请解锁并完成授权后重试")
+    return device
 
 
 def search_log(platform, keyword, limit=200, use_regex=False):
@@ -846,6 +875,18 @@ class Handler(BaseHTTPRequestHandler):
                 ensure_ascii=False,
             ))
 
+        if route == ["device", "screenshot"]:
+            try:
+                device = require_available_device(platform)
+                with _device_command_locks[platform]:
+                    image = capture_screenshot(platform, device)
+            except DeviceToolError as exc:
+                return self._send(409, json.dumps(
+                    {"error": str(exc)},
+                    ensure_ascii=False,
+                ))
+            return self._send(200, image, "image/png")
+
         if route == ["link", "resolve"]:
             params = parse_qs(urlparse(self.path).query, keep_blank_values=True)
             value = (params.get("url") or [""])[0]
@@ -946,6 +987,15 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(400, json.dumps({"error": "action not allowed"}))
             if configuration and configuration not in ("Debug", "Release"):
                 return self._send(400, json.dumps({"error": "configuration not allowed"}))
+            if action in DEVICE_REQUIRED_ACTIONS:
+                try:
+                    require_available_device(platform)
+                except DeviceToolError as exc:
+                    label = ACTION_LABELS.get(action, action)
+                    return self._send(409, json.dumps({
+                        "error": f"未开始{label}：{exc}。请连接并解锁设备后重试。",
+                        "deviceRequired": True,
+                    }, ensure_ascii=False))
             job, conflict = start_job(platform, action, configuration)
             if conflict:
                 return self._send(409, json.dumps({
