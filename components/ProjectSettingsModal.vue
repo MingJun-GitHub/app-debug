@@ -187,6 +187,37 @@ watch(() => props.modelValue, (value) => {
                 </div>
               </div>
 
+              <div v-if="projects[platform].git.submodules.length" class="settings-submodules">
+                <div class="settings-submodule-head">
+                  <span>子模块</span>
+                  <UBadge color="gray" variant="subtle">
+                    {{ projects[platform].git.submodules.length }}
+                  </UBadge>
+                </div>
+                <div
+                  v-for="submodule in projects[platform].git.submodules"
+                  :key="submodule.path"
+                  class="settings-submodule-row"
+                >
+                  <code>{{ submodule.path }}</code>
+                  <span>{{ submodule.branch || 'detached' }}</span>
+                  <UBadge
+                    :color="submodule.conflicted
+                      ? 'red'
+                      : submodule.modified || submodule.dirty
+                        ? 'amber'
+                        : 'green'"
+                    variant="subtle"
+                  >
+                    {{ submodule.conflicted
+                      ? '冲突'
+                      : submodule.modified || submodule.dirty
+                        ? '有变化'
+                        : '正常' }}
+                  </UBadge>
+                </div>
+              </div>
+
               <div
                 v-for="message in projects[platform].errors"
                 :key="message"

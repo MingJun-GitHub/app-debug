@@ -10,6 +10,8 @@
 #   ./run163.sh log          启动并挂控制台日志
 #   ./run163.sh doctor       检查环境
 #   ./run163.sh logs         拉取 xlog 并解码
+#   ./run163.sh test         运行单元测试
+#   ./run163.sh lint         运行 Xcode Analyze
 #
 set -u
 
@@ -240,6 +242,46 @@ cmd_logs() {
   ok "输出: $PROJECT_DIR/log/decoded.log"
 }
 
+cmd_test() {
+  detect_device
+  log "运行 iOS 单元测试 ${SCHEME} (${CONFIGURATION})"
+  dim "设备    : ${DEVICE_NAME:-$DEVICE_UDID}"
+  dim "缓存    : $DERIVED_DATA"
+  hr
+
+  cd "$PROJECT_DIR" || die "进入项目目录失败: $PROJECT_DIR"
+  xcodebuild \
+    -workspace "$WORKSPACE" \
+    -scheme "$SCHEME" \
+    -configuration "$CONFIGURATION" \
+    -derivedDataPath "$DERIVED_DATA" \
+    -destination "id=$DEVICE_UDID" \
+    -only-testing:BloomchicStoreTests \
+    test 2>&1
+  local rc=$?
+  [[ $rc -eq 0 ]] || return $rc
+  ok "iOS 单元测试通过"
+}
+
+cmd_lint() {
+  log "运行 iOS 静态检查 ${SCHEME} (${CONFIGURATION})"
+  dim "目标    : generic/platform=iOS"
+  dim "缓存    : $DERIVED_DATA"
+  hr
+
+  cd "$PROJECT_DIR" || die "进入项目目录失败: $PROJECT_DIR"
+  xcodebuild \
+    -workspace "$WORKSPACE" \
+    -scheme "$SCHEME" \
+    -configuration "$CONFIGURATION" \
+    -derivedDataPath "$DERIVED_DATA" \
+    -destination "generic/platform=iOS" \
+    analyze 2>&1
+  local rc=$?
+  [[ $rc -eq 0 ]] || return $rc
+  ok "iOS 静态检查通过"
+}
+
 cmd_grep() {
   local keyword="${1:-}"
   [[ -n "$keyword" ]] || die "用法: ./run163.sh grep <关键字>"
@@ -293,6 +335,8 @@ usage() {
   print -r -- "  log        启动并挂控制台日志"
   print -r -- "  logs       拉取并解码 App 日志"
   print -r -- "  doctor     环境检查"
+  print -r -- "  test       运行 iOS 单元测试"
+  print -r -- "  lint       运行 Xcode Analyze"
   print -r -- "  devices    列出可用设备（JSON）"
   print -r -- "  grep <kw>  在已解码日志里搜索关键字"
   print -r -- ""
@@ -326,6 +370,12 @@ case "${1:-all}" in
   logs)
     detect_device
     cmd_logs
+    ;;
+  test)
+    cmd_test
+    ;;
+  lint)
+    cmd_lint
     ;;
   devices)
     cmd_devices

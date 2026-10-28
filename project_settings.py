@@ -97,6 +97,7 @@ def _git(path: Path) -> dict[str, Any]:
         "changedFiles": 0,
         "detached": False,
         "remote": "",
+        "submodules": [],
     }
     if not path.is_dir():
         return empty
@@ -137,6 +138,7 @@ def _git(path: Path) -> dict[str, Any]:
         )
         changed_lines = [line for line in status.stdout.splitlines() if line.strip()]
         branch_name = branch.stdout.strip()
+        submodules = _git_submodules(repo_root)
         return {
             "repoRoot": str(repo_root),
             "repoName": repo_root.name,
@@ -146,9 +148,83 @@ def _git(path: Path) -> dict[str, Any]:
             "changedFiles": len(changed_lines),
             "detached": not bool(branch_name),
             "remote": remote.stdout.strip() if remote.returncode == 0 else "",
+            "submodules": submodules,
         }
     except Exception:  # noqa: BLE001
         return empty
+
+
+def _git_submodules(repo_root: Path) -> list[dict[str, Any]]:
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(repo_root), "submodule", "status", "--recursive"],
+            capture_output=True,
+            text=True,
+            timeout=8,
+        )
+    except Exception:  # noqa: BLE001
+        return []
+    if result.returncode != 0:
+        return []
+
+    submodules: list[dict[str, Any]] = []
+    for line in result.stdout.splitlines():
+        if not line.strip():
+            continue
+        state = line[0] if line[0] in " +-U" else " "
+        body = line[1:].strip()
+        parts = body.split()
+        if len(parts) < 2:
+            continue
+        commit = parts[0]
+        relative_path = parts[1]
+        absolute_path = repo_root / relative_path
+        initialized = state != "-"
+        dirty = False
+        branch = ""
+        if initialized and absolute_path.is_dir():
+            try:
+                branch_result = subprocess.run(
+                    [
+                        "git",
+                        "-C",
+                        str(absolute_path),
+                        "symbolic-ref",
+                        "--short",
+                        "-q",
+                        "HEAD",
+                    ],
+                    capture_output=True,
+                    text=True,
+                    timeout=5,
+                )
+                branch = branch_result.stdout.strip()
+                dirty_result = subprocess.run(
+                    [
+                        "git",
+                        "-C",
+                        str(absolute_path),
+                        "status",
+                        "--porcelain",
+                        "--untracked-files=no",
+                    ],
+                    capture_output=True,
+                    text=True,
+                    timeout=5,
+                )
+                dirty = bool(dirty_result.stdout.strip())
+            except Exception:  # noqa: BLE001
+                pass
+        submodules.append({
+            "path": relative_path,
+            "commit": commit,
+            "branch": branch or ("detached" if initialized else ""),
+            "initialized": initialized,
+            "dirty": dirty,
+            "modified": state == "+",
+            "conflicted": state == "U",
+        })
+    return submodules
 
 
 def _display_name(platform: str, path: Path, git: dict[str, Any]) -> str:

@@ -10,6 +10,8 @@
 #   ./runandroid.sh log      启动并跟随 logcat
 #   ./runandroid.sh logs     拉取并解码 xlog
 #   ./runandroid.sh doctor   环境检查
+#   ./runandroid.sh test     运行 Debug 单元测试
+#   ./runandroid.sh lint     运行 Debug Lint
 #
 set -u
 
@@ -187,6 +189,32 @@ cmd_logs() {
   [[ -f "$LOG_FILE" ]] && ok "输出: $LOG_FILE"
 }
 
+cmd_test() {
+  log "运行 Android Debug 单元测试"
+  dim "项目    : $PROJECT_DIR"
+  dim "任务    : :app:testDebugUnitTest"
+  print -r -- "────────────────────────────────────────────────────────"
+  cd "$PROJECT_DIR" || die "进入项目目录失败: $PROJECT_DIR"
+  [[ -x "$GRADLEW" ]] || die "找不到 Gradle Wrapper: $GRADLEW"
+  "$GRADLEW" :app:testDebugUnitTest --console=plain 2>&1
+  local rc=$?
+  [[ $rc -eq 0 ]] || return $rc
+  ok "Android 单元测试通过"
+}
+
+cmd_lint() {
+  log "运行 Android Debug Lint"
+  dim "项目    : $PROJECT_DIR"
+  dim "任务    : :app:lintDebug"
+  print -r -- "────────────────────────────────────────────────────────"
+  cd "$PROJECT_DIR" || die "进入项目目录失败: $PROJECT_DIR"
+  [[ -x "$GRADLEW" ]] || die "找不到 Gradle Wrapper: $GRADLEW"
+  "$GRADLEW" :app:lintDebug --console=plain 2>&1
+  local rc=$?
+  [[ $rc -eq 0 ]] || return $rc
+  ok "Android 静态检查通过"
+}
+
 cmd_doctor() {
   local failures=0
   log "Android 环境检查"
@@ -254,6 +282,12 @@ case "${1:-all}" in
     ;;
   logs)
     cmd_logs
+    ;;
+  test)
+    cmd_test
+    ;;
+  lint)
+    cmd_lint
     ;;
   doctor)
     cmd_doctor

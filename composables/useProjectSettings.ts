@@ -7,6 +7,15 @@ export interface ProjectGitInfo {
   changedFiles: number
   detached: boolean
   remote: string
+  submodules: Array<{
+    path: string
+    commit: string
+    branch: string
+    initialized: boolean
+    dirty: boolean
+    modified: boolean
+    conflicted: boolean
+  }>
 }
 
 export interface ProjectConnection {

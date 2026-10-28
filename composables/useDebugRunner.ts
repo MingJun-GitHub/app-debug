@@ -77,6 +77,7 @@ export interface DeviceContext {
 
 interface JobSnapshot {
   id: string
+  sessionId?: string
   done: boolean
   cancelled: boolean
   exitCode: number | null
@@ -126,7 +127,8 @@ export function useDebugRunner(platform: 'ios' | 'android') {
   const events = ref<DebugEvent[]>([])
   const logs = ref<Array<{ n: number, text: string }>>([])
   const logMeta = ref('尚未搜索')
-  const activeJob = ref<{ id: string, action: string } | null>(null)
+  const activeJob = ref<{ id: string, action: string, configuration: string } | null>(null)
+  const currentSessionId = ref('')
   const jobDone = ref(true)
   const jobResult = ref<'success' | 'error' | 'cancelled' | null>(null)
   const elapsed = ref(0)
@@ -258,10 +260,16 @@ export function useDebugRunner(platform: 'ios' | 'android') {
       jobOffset = job.total
       elapsed.value = job.elapsed
       if (job.done) {
+        const sessionId = job.sessionId || currentSessionId.value
+        const configuration = activeJob.value?.configuration || 'Debug'
         busy.value = false
         jobDone.value = true
         jobResult.value = job.cancelled ? 'cancelled' : job.exitCode === 0 ? 'success' : 'error'
         activeJob.value = null
+        if (sessionId) {
+          currentSessionId.value = sessionId
+          void captureSessionSnapshot(sessionId, configuration)
+        }
         await refreshStatus()
         return
       }
@@ -281,18 +289,39 @@ export function useDebugRunner(platform: 'ios' | 'android') {
     busy.value = true
     jobDone.value = false
     try {
-      const data = await requestJSON<{ jobId: string }>(`${apiBase}/run`, {
+      const data = await requestJSON<{ jobId: string, sessionId: string }>(`${apiBase}/run`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ action, configuration })
       })
-      activeJob.value = { id: data.jobId, action }
+      activeJob.value = { id: data.jobId, action, configuration }
+      currentSessionId.value = data.sessionId || ''
       pollJob()
     } catch (error) {
       appendLines([`[runner] ${error instanceof Error ? error.message : String(error)}`])
       busy.value = false
       jobDone.value = true
       jobResult.value = 'error'
+    }
+  }
+
+  async function captureSessionSnapshot(sessionId: string, configuration = 'Debug') {
+    try {
+      await loadDeviceContext(configuration, true)
+      if (!deviceContext.value) return
+      await requestJSON(
+        `${apiBase}/sessions/${encodeURIComponent(sessionId)}/snapshot`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            context: deviceContext.value,
+            label: 'post-run'
+          })
+        }
+      )
+    } catch {
+      // Session persistence must not block the primary debug workflow.
     }
   }
 
@@ -346,6 +375,7 @@ export function useDebugRunner(platform: 'ios' | 'android') {
     logs,
     logMeta,
     activeJob,
+    currentSessionId,
     jobDone,
     jobResult,
     elapsed,

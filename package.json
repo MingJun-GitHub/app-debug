@@ -1,6 +1,6 @@
 {
   "name": "app-debug",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "private": true,
   "type": "module",
   "scripts": {
@@ -9,15 +9,18 @@
     "dev:api": "python3 server.py --no-browser",
     "serve": "python3 server.py --no-browser",
     "build": "nuxt generate",
+    "test:py": "python3 -m unittest discover -s tests -v",
+    "test": "npm run test:py",
+    "mcp": "python3 mcp_server.py",
     "preview": "nuxt preview",
     "postinstall": "nuxt prepare"
   },
   "dependencies": {
     "@nuxt/ui": "2.22.3",
-    "nuxt": "3.21.0",
+    "nuxt": "^3.21.11",
     "qrcode": "^1.5.4",
-    "vue": "3.5.27",
-    "vue-router": "4.6.4"
+    "vue": "^3.5.44",
+    "vue-router": "^4.6.4"
   },
   "devDependencies": {
     "@types/qrcode": "^1.5.6"

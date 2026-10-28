@@ -10,11 +10,19 @@ iOS 与 Android 必须保持隔离：切换平台时，另一平台的设备选�
 
 | 路径 | 职责 |
 |---|---|
-| `app.vue` | 页面结构、平台切换、四个 Tab、任务操作 |
+| `app.vue` | 页面结构、平台切换、Tab 和任务操作 |
 | `composables/useDebugRunner.ts` | 设备、任务、日志、设备上下文的 API 状态 |
+| `composables/useDebugSessions.ts` | 会话、设备快照、诊断导出和路由清单状态 |
 | `server.py` | 本地 HTTP API、静态页面托管、任务进程管理 |
 | `device_context.py` | iOS plist / NSKeyedArchiver 和 Android `run-as` / MMKV / SharedPreferences 读取 |
 | `project_settings.py` | 本机项目目录持久化、项目结构校验和 Git 元数据读取 |
+| `app_debug/sessions.py` | 调试会话、设备快照和诊断包持久化 |
+| `app_debug/analysis.py` | 错误指纹、源码位置和验证日志分析 |
+| `app_debug/jobs.py` | 任务快照和增量输出模型 |
+| `app_debug/route_inventory.py` | 只读提取 iOS / Android 路由清单 |
+| `app_debug/redaction.py` | 复制和导出前的敏感信息遮盖 |
+| `app_debug/links.py` | H5、Universal Link 和 Deep Link 纯函数 |
+| `mcp_server.py` | 本地 MCP stdio 桥接 |
 | `run163.sh`、`runandroid.sh` | 两端的构建、安装、启动、日志和环境检查 |
 | `tests/test_device_context.py` | 设备上下文解析测试 |
 | `tests/test_project_settings.py` | 项目关联、校验和分支读取测试 |
@@ -32,6 +40,8 @@ iOS 与 Android 必须保持隔离：切换平台时，另一平台的设备选�
 - 每个平台同时最多运行一个任务。停止任务需要二次确认；页面离开时会通知后端终止活动任务。
 - 设备上下文读取失败时返回部分数据，不能阻塞设备选择或影响其他调试功能。
 - 顶部项目名称打开“项目设置”，可关联 iOS/Android 目录并查看分支、提交和工作区状态。
+- “会话”持久化每次运行和验证，支持错误聚合、设备快照 Diff，以及脱敏 Markdown/JSON 诊断包。
+- App Debug 只调用两个业务仓库已有命令，不修改其源码、测试、配置或 CI。
 
 ## 设备上下文来源
 
@@ -74,8 +84,14 @@ npm run dev
 提交前至少执行：
 
 ```sh
-python3 -m unittest discover -s tests -v
+npm run test:py
 npm run build
+```
+
+会话、HTTP API、路由和 MCP 协议均有单元测试。MCP 通过以下命令运行：
+
+```sh
+npm run mcp
 ```
 
 Nuxt 页面支持 HMR。修改 `server.py` 或 `device_context.py` 后必须重启 Python 服务；`scripts/dev.mjs` 不会自动重载 Python：
@@ -173,6 +189,8 @@ iOS 验证复用相同步骤，只替换平台 Tab 和 `/api/ios/...`。断言�
 ## 修改边界
 
 - 设备上下文保持只读、Debug 导向；不修改 iOS/Android 业务仓库。
+- 验证中心只调用现有命令；构建、测试产物由原仓库正常生成。
+- 复制、导出和 MCP 返回的诊断内容必须脱敏。
 - 响应和页面中不得出现 token、Cookie、Authorization、APNs/FCM token 或用户凭据。
 - 保留工作区中与当前任务无关的用户修改。
 - 缓存格式属于兼容边界；修改 `device_context.py` 时同步更新解析测试。

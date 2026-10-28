@@ -2,10 +2,19 @@ import unittest
 from unittest.mock import patch
 
 import server
+from app_debug.jobs import Job
 from device_tools import DeviceToolError
 
 
 class RunDeviceGuardTest(unittest.TestCase):
+    def test_job_snapshot_includes_session_and_incremental_lines(self):
+        job = Job("android", "test", "Debug", "session-1")
+        job.append("first\nsecond")
+        snapshot = job.snapshot()
+        self.assertEqual(snapshot["sessionId"], "session-1")
+        self.assertEqual(snapshot["lines"], ["first", "second"])
+        self.assertEqual(job.snapshot(1)["lines"], ["second"])
+
     def test_all_resource_actions_require_a_device(self):
         self.assertEqual(
             server.DEVICE_REQUIRED_ACTIONS,

@@ -67,12 +67,51 @@ python3 server.py
 - 日志：搜索设备 `decoded.log`
 - 设备：读取 App 已有的环境、神策设备 ID、Distinct ID、AB 进组/出组缓存，并可预览、涂鸦和复制当前设备截图
 - 页面：粘贴 H5 链接，生成 Universal Link 和 App Deep Link，支持复制、浏览器打开、设备打开和二维码
+- 会话：持久化构建、验证、设备快照、错误聚合和源码位置，支持脱敏复制及 Markdown/JSON 诊断包
 - 页面快捷跳转：按美国、英国、澳洲、欧洲、德国、法国站点提供首页、购物车、订单、评论、会员、设置、客服等常用入口
-- 项目设置：关联本机 iOS / Android 项目目录，显示 Git 分支、提交和工作区状态
+- 项目设置：关联本机 iOS / Android 项目目录，显示 Git 分支、提交、工作区及递归子模块状态
 - 运行配置：设备选择、Debug/Release、构建、安装、启动和拉日志
 - 设备支持手动重新检测，插入设备后无需等待自动轮询
 - 实时日志支持“分类预设 + 二次关键词”两级筛选
 - 错误、搜索结果和单条实时日志均支持快速复制
+- 复制和诊断导出默认遮盖 Authorization、Cookie、JWT、token、密码和邮箱
+
+## 验证中心
+
+“会话”页可以调用两个业务仓库已有的验证入口，但不会修改它们的源码：
+
+- iOS：`xcodebuild` 单元测试和 Analyze
+- Android：`:app:testDebugUnitTest` 和 `:app:lintDebug`
+- 构建、安装、启动和日志任务会自动生成调试会话
+- 任务结束后自动尝试保存设备上下文快照
+- 会话包含分支、提交、子模块、产物、错误指纹、源码位置和最近设备环境
+- 可以保存后续设备快照并查看站点、环境、身份和 AB 分组变化
+
+会话默认保存在：
+
+```text
+~/Library/Application Support/App Debug/sessions/
+```
+
+可通过 `APP_DEBUG_SESSIONS` 覆盖。会话日志和导出仅保存在本机。
+
+## 本地 MCP
+
+`mcp_server.py` 通过 stdio 暴露 App Debug 的本地能力，供 AI 客户端调用：
+
+```sh
+npm run mcp
+```
+
+支持读取状态、会话、设备上下文和路由，启动现有验证，查询任务，打开链接和截图。构建、安装、启动、日志操作必须传入 `confirm=true`；返回给 AI 的诊断数据会脱敏。
+
+```toml
+[mcp_servers.app_debug]
+command = "python3"
+args = ["/absolute/path/to/app-debug/mcp_server.py"]
+```
+
+先启动 App Debug 服务，默认连接 `http://127.0.0.1:8787`。可通过 `APP_DEBUG_URL` 覆盖。
 
 ## 日志筛选
 
@@ -144,6 +183,8 @@ python3 server.py
 ./run163.sh log        # 启动并挂控制台日志
 ./run163.sh logs       # 拉取并解码 App 日志
 ./run163.sh doctor     # 环境检查
+./run163.sh test       # 运行 BloomchicStoreTests
+./run163.sh lint       # 运行 Xcode Analyze
 ```
 
 配置通过环境变量覆盖：
@@ -167,6 +208,8 @@ DEVICE_UDID=00008150-XXXXXXXXXXXX \
 ./runandroid.sh log        # 启动并跟随 logcat
 ./runandroid.sh logs       # 拉取并解码 xlog
 ./runandroid.sh doctor     # 环境检查
+./runandroid.sh test       # 运行 Debug 单元测试
+./runandroid.sh lint       # 运行 Debug Lint
 ```
 
 默认项目目录为 `~/Desktop/app/android`，包名为 `com.bloomchic.app`。可通过 `PROJECT_DIR`、`CONFIGURATION`、`BUNDLE_ID`、`DEVICE_SERIAL` 覆盖。

@@ -19,8 +19,12 @@ import webbrowser
 from argparse import ArgumentParser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import parse_qs, unquote, urlparse, urlsplit, urlunsplit
+from urllib.parse import parse_qs, unquote, urlparse
 
+from app_debug.jobs import Job
+from app_debug.links import normalize_link_url, resolve_page_links
+from app_debug.route_inventory import route_inventory
+from app_debug.sessions import SessionStore
 from device_context import now_iso, read_app_context
 from device_tools import (
     DeviceToolError,
@@ -41,7 +45,17 @@ INDEX = DIST_DIR / "index.html"
 HOST = "127.0.0.1"
 PORT = int(os.environ.get("PORT", "8787"))
 
-ALLOWED_ACTIONS = {"all", "build", "install", "launch", "log", "logs", "doctor"}
+ALLOWED_ACTIONS = {
+    "all",
+    "build",
+    "install",
+    "launch",
+    "log",
+    "logs",
+    "doctor",
+    "test",
+    "lint",
+}
 DEVICE_REQUIRED_ACTIONS = {"all", "build", "install", "launch", "log", "logs"}
 ACTION_LABELS = {
     "all": "构建并启动",
@@ -50,6 +64,8 @@ ACTION_LABELS = {
     "launch": "启动",
     "log": "启动并跟随日志",
     "logs": "拉取日志",
+    "test": "单元测试",
+    "lint": "静态检查",
 }
 PLATFORMS = {
     "ios": {
@@ -68,40 +84,13 @@ PLATFORMS = {
     },
 }
 
-WEB_TO_DEEP_HOST = {
-    "bloomchic.com": "app",
-    "bloomchic.co.uk": "app.uk",
-    "au.bloomchic.com": "app.au",
-    "bloomchic.au": "app.au",
-    "eu.bloomchic.com": "app.eu",
-    "bloomchic.eu": "app.eu",
-    "de.bloomchic.com": "app.de",
-    "bloomchic.de": "app.de",
-    "fr.bloomchic.com": "app.fr",
-    "bloomchic.fr": "app.fr",
-    "bloom-chic-dev.myshopify.com": "app",
-}
-
-DEEP_TO_WEB_HOST = {
-    "app": "https://bloomchic.com",
-    "app.uk": "https://bloomchic.co.uk",
-    "app.au": "https://au.bloomchic.com",
-    "app.eu": "https://eu.bloomchic.com",
-    "app.de": "https://bloomchic.de",
-    "app.fr": "https://bloomchic.fr",
-}
-
-LINK_AGGREGATORS = {
-    "bloomchic.onelink.me",
-    "bloomchic.page.link",
-}
-
 _settings_lock = threading.Lock()
 _settings, _settings_error = load_settings()
 apply_settings(PLATFORMS, _settings)
 
 _jobs = {}
 _jobs_lock = threading.Lock()
+_sessions = SessionStore()
 _device_context_lock = threading.Lock()
 _device_context_cache = {}
 _device_command_locks = {
@@ -115,54 +104,6 @@ _selected_devices = {
     "ios": {"udid": "", "name": ""},
     "android": {"udid": "", "name": ""},
 }
-
-
-class Job:
-    def __init__(self, platform, action, configuration=""):
-        self.id = uuid.uuid4().hex[:12]
-        self.platform = platform
-        self.action = action
-        self.configuration = configuration
-        self.lines = []
-        self.line_base = 0
-        self.line_lock = threading.Lock()
-        self.done = False
-        self.exit_code = None
-        self.started = time.time()
-        self.finished = None
-        self.proc = None
-        self.cancel_requested = threading.Event()
-        self.completed = threading.Event()
-
-    def append(self, text):
-        with self.line_lock:
-            for line in text.splitlines():
-                self.lines.append(line.rstrip("\r"))
-            if len(self.lines) > 5000:
-                removed = len(self.lines) - 3000
-                self.lines = self.lines[-3000:]
-                self.line_base += removed
-
-    def snapshot(self, offset=0):
-        with self.line_lock:
-            truncated = offset < self.line_base
-            local_offset = max(0, offset - self.line_base)
-            lines = self.lines[local_offset:]
-            total = self.line_base + len(self.lines)
-        return {
-            "id": self.id,
-            "platform": self.platform,
-            "action": self.action,
-            "done": self.done,
-            "cancelled": self.cancel_requested.is_set(),
-            "exitCode": self.exit_code,
-            "running": self.proc is not None and self.proc.poll() is None,
-            "elapsed": round((self.finished or time.time()) - self.started, 1),
-            "total": total,
-            "offset": offset,
-            "truncated": truncated,
-            "lines": lines,
-        }
 
 
 def _run_job(job):
@@ -198,7 +139,10 @@ def _run_job(job):
             _signal_job(job, signal.SIGTERM)
         assert proc.stdout is not None
         for line in iter(proc.stdout.readline, ""):
-            job.append(line.rstrip("\n"))
+            text = line.rstrip("\n")
+            job.append(text)
+            if job.session_id:
+                _sessions.append_log(job.platform, job.session_id, text)
         proc.wait()
         job.exit_code = proc.returncode
     except Exception as exc:  # noqa: BLE001
@@ -213,6 +157,27 @@ def _run_job(job):
                 _signal_job(job, signal.SIGKILL)
         job.done = True
         job.finished = time.time()
+        if job.session_id:
+            try:
+                status = (
+                    "cancelled"
+                    if job.cancel_requested.is_set()
+                    else "success"
+                    if job.exit_code == 0
+                    else "error"
+                )
+                artifact = latest_artifact(job.platform, job.configuration)
+                _sessions.complete(
+                    platform=job.platform,
+                    session_id=job.session_id,
+                    status=status,
+                    exit_code=job.exit_code,
+                    elapsed=round(job.finished - job.started, 1),
+                    lines=job.lines,
+                    artifact=artifact,
+                )
+            except Exception as exc:  # noqa: BLE001
+                job.append(f"[session] 保存会话失败: {exc}")
         job.completed.set()
 
 
@@ -241,7 +206,25 @@ def stop_job(job):
     return True
 
 
-def start_job(platform, action, configuration=""):
+def session_project(platform):
+    runtime = PLATFORMS[platform]
+    info = project_info(platform, str(runtime["project"]))
+    git = info.get("git") or {}
+    return {
+        "path": info["path"],
+        "displayName": info["displayName"],
+        "repoName": git.get("repoName") or "",
+        "branch": git.get("branch") or "",
+        "commit": git.get("commit") or "",
+        "dirty": bool(git.get("dirty")),
+        "changedFiles": git.get("changedFiles") or 0,
+        "detached": bool(git.get("detached")),
+        "remote": git.get("remote") or "",
+        "submodules": git.get("submodules") or [],
+    }
+
+
+def start_job(platform, action, configuration="", device=None):
     with _jobs_lock:
         active = [
             job for job in _jobs.values()
@@ -259,6 +242,22 @@ def start_job(platform, action, configuration=""):
             )
             for key in finished[:remove_count]:
                 _jobs.pop(key, None)
+
+    try:
+        session_id = uuid.uuid4().hex
+        status = platform_status(platform)
+        _sessions.create(
+            platform=platform,
+            session_id=session_id,
+            action=action,
+            configuration=configuration,
+            project=session_project(platform),
+            device=device or status.get("device"),
+            artifact=status.get("artifact"),
+        )
+        job.session_id = session_id
+    except Exception as exc:  # noqa: BLE001
+        job.append(f"[session] 创建会话失败: {exc}")
     thread = threading.Thread(target=_run_job, args=(job,), daemon=True)
     thread.start()
     return job, None
@@ -360,6 +359,51 @@ def latest_ios_sdk():
         return None
 
 
+def file_metadata(path: Path, version: str = "") -> dict | None:
+    if not path.exists():
+        return None
+    stat = path.stat()
+    return {
+        "name": path.name,
+        "path": str(path),
+        "version": version,
+        "size": stat.st_size if path.is_file() else None,
+        "mtime": stat.st_mtime,
+    }
+
+
+def latest_ios_artifact(configuration="Debug"):
+    app = (
+        PLATFORMS["ios"]["project"]
+        / ".derivedData"
+        / "Build"
+        / "Products"
+        / f"{configuration}-iphoneos"
+        / "BloomchicStore.app"
+    )
+    if not app.exists():
+        return None
+    version = ""
+    plist = app / "Info.plist"
+    if plist.exists():
+        try:
+            result = subprocess.run(
+                [
+                    "/usr/libexec/PlistBuddy",
+                    "-c",
+                    "Print :CFBundleShortVersionString",
+                    str(plist),
+                ],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            version = result.stdout.strip()
+        except Exception:  # noqa: BLE001
+            pass
+    return file_metadata(app, version)
+
+
 def list_ios_devices():
     try:
         out = subprocess.run(
@@ -436,119 +480,6 @@ def list_android_devices():
 
 def list_devices(platform):
     return list_ios_devices() if platform == "ios" else list_android_devices()
-
-
-def normalize_link_url(value):
-    """Validate and normalize a URL intended for the installed app."""
-    raw = str(value or "").strip()
-    if not raw:
-        raise ValueError("链接不能为空")
-    if len(raw) > 8192:
-        raise ValueError("链接过长")
-    if not re.match(r"^[A-Za-z][A-Za-z0-9+.-]*:", raw):
-        raw = f"https://{raw}"
-    try:
-        parsed = urlsplit(raw)
-        scheme = parsed.scheme.lower()
-        hostname = (parsed.hostname or "").lower()
-    except ValueError as exc:
-        raise ValueError(f"链接格式无效: {exc}") from exc
-    if scheme not in {"http", "https", "bloomchic"}:
-        raise ValueError("仅支持 http、https 或 bloomchic 链接")
-    if not hostname:
-        raise ValueError("链接缺少域名或 host")
-    return urlunsplit((scheme, parsed.netloc, parsed.path, parsed.query, parsed.fragment))
-
-
-def resolve_page_links(value):
-    """Build H5, Universal Link and App Deep Link variants from one URL."""
-    normalized = normalize_link_url(value)
-    parsed = urlsplit(normalized)
-    scheme = parsed.scheme.lower()
-    hostname = (parsed.hostname or "").lower()
-    normalized_host = hostname.removeprefix("www.")
-    warning = ""
-
-    if scheme in {"http", "https"}:
-        h5_url = normalized
-        universal_url = normalized
-        if normalized_host in LINK_AGGREGATORS:
-            deep_url = ""
-            deep_host = ""
-            warning = "聚合短链不能直接转换为 App Deep Link，请使用 Universal Link。"
-        else:
-            deep_host = WEB_TO_DEEP_HOST.get(normalized_host, "app")
-            if normalized_host not in WEB_TO_DEEP_HOST and not normalized_host.endswith(".myshopify.com"):
-                warning = "未识别的 H5 域名，Deep Link 将使用默认 bloomchic://app。"
-            path = parsed.path
-            if path == "/":
-                path = ""
-            deep_url = urlunsplit(("bloomchic", deep_host, path, parsed.query, parsed.fragment))
-        web_host = normalized_host
-    else:
-        deep_url = normalized
-        deep_host = hostname
-        web_base = DEEP_TO_WEB_HOST.get(hostname)
-        if web_base:
-            base = urlsplit(web_base)
-            universal_url = urlunsplit((
-                base.scheme,
-                base.netloc,
-                parsed.path or base.path,
-                parsed.query,
-                parsed.fragment,
-            ))
-            h5_url = universal_url
-            web_host = base.netloc.removeprefix("www.")
-        else:
-            universal_url = ""
-            h5_url = ""
-            web_host = ""
-            warning = "未识别的 App host，无法反推 H5 / Universal Link。"
-
-    recognized_universal = bool(
-        web_host
-        and (
-            web_host in WEB_TO_DEEP_HOST
-            or web_host in LINK_AGGREGATORS
-            or web_host.endswith(".bloomchic.com")
-            or web_host.endswith(".bloomchic.co.uk")
-            or web_host.endswith(".myshopify.com")
-        )
-    )
-
-    targets = []
-    if h5_url:
-        targets.append({
-            "kind": "h5",
-            "label": "H5 页面",
-            "description": "浏览器直接访问的网页地址",
-            "value": h5_url,
-        })
-    if universal_url:
-        targets.append({
-            "kind": "universal",
-            "label": "Universal Link",
-            "description": "扫码或从系统打开时，由 iOS / Android 决定进入 App 或浏览器",
-            "value": universal_url,
-        })
-    if deep_url:
-        targets.append({
-            "kind": "deeplink",
-            "label": "App Deep Link",
-            "description": "直接交给当前 App 的路由处理",
-            "value": deep_url,
-        })
-
-    return {
-        "input": str(value or "").strip(),
-        "normalized": normalized,
-        "siteHost": web_host,
-        "deepLinkHost": deep_host,
-        "recognizedUniversal": recognized_universal,
-        "warning": warning,
-        "targets": targets,
-    }
 
 
 def open_device_link(platform, value):
@@ -646,11 +577,13 @@ def latest_android_artifact(configuration="Debug"):
                 version = str(elements[0].get("versionName") or "")
         except Exception:  # noqa: BLE001
             pass
-    return {
-        "name": files[0].name,
-        "path": str(files[0]),
-        "version": version,
-    }
+    return file_metadata(files[0], version)
+
+
+def latest_artifact(platform, configuration="Debug"):
+    if platform == "ios":
+        return latest_ios_artifact(configuration)
+    return latest_android_artifact(configuration)
 
 
 def platform_status(platform):
@@ -660,13 +593,7 @@ def platform_status(platform):
         selected = dict(_selected_devices[platform])
     if platform == "ios":
         sdk = latest_ios_sdk()
-        artifact = None
-        app = (
-            PLATFORMS["ios"]["project"]
-            / ".derivedData/Build/Products/Debug-iphoneos/BloomchicStore.app"
-        )
-        if app.exists():
-            artifact = {"name": app.name, "path": str(app)}
+        artifact = latest_ios_artifact()
     else:
         sdk = None
         artifact = latest_android_artifact()
@@ -801,7 +728,11 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(data)))
         self.send_header("Cache-Control", cache)
         self.end_headers()
-        self.wfile.write(data)
+        try:
+            self.wfile.write(data)
+        except (BrokenPipeError, ConnectionResetError):
+            # The browser can cancel polling while a task is ending or the page closes.
+            pass
 
     def _serve_static(self, path):
         if not INDEX.exists():
@@ -887,6 +818,44 @@ class Handler(BaseHTTPRequestHandler):
                 ))
             return self._send(200, image, "image/png")
 
+        if route == ["sessions"]:
+            params = parse_qs(urlparse(self.path).query, keep_blank_values=True)
+            try:
+                limit = int((params.get("limit") or ["30"])[0])
+            except ValueError:
+                limit = 30
+            return self._send(200, json.dumps({
+                "sessions": _sessions.list(platform, limit),
+                "root": str(_sessions.root),
+            }, ensure_ascii=False))
+
+        if len(route) == 3 and route[0] == "sessions" and route[2] == "export":
+            params = parse_qs(urlparse(self.path).query, keep_blank_values=True)
+            format_name = (params.get("format") or ["markdown"])[0]
+            try:
+                result = _sessions.export(platform, route[1], format_name)
+            except (KeyError, ValueError):
+                return self._send(404, json.dumps({"error": "session not found"}))
+            return self._send(200, json.dumps(result, ensure_ascii=False))
+
+        if len(route) == 2 and route[0] == "sessions":
+            try:
+                session = _sessions.get(platform, route[1])
+            except ValueError:
+                session = None
+            if not session:
+                return self._send(404, json.dumps({"error": "session not found"}))
+            return self._send(200, json.dumps(session, ensure_ascii=False))
+
+        if route == ["routes"]:
+            return self._send(200, json.dumps(
+                route_inventory(
+                    platform,
+                    str(PLATFORMS[platform]["project"]),
+                ),
+                ensure_ascii=False,
+            ))
+
         if route == ["link", "resolve"]:
             params = parse_qs(urlparse(self.path).query, keep_blank_values=True)
             value = (params.get("url") or [""])[0]
@@ -938,6 +907,8 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):  # noqa: N802
         path = self.path.split("?")[0]
         length = int(self.headers.get("Content-Length") or 0)
+        if length > 5 * 1024 * 1024:
+            return self._send(413, json.dumps({"error": "request body too large"}))
         raw = self.rfile.read(length) if length else b"{}"
         try:
             payload = json.loads(raw or b"{}")
@@ -980,6 +951,21 @@ class Handler(BaseHTTPRequestHandler):
             platform = "ios"
             route = parts[1:]
 
+        if len(route) == 3 and route[0] == "sessions" and route[2] == "snapshot":
+            context = payload.get("context")
+            if not isinstance(context, dict):
+                return self._send(400, json.dumps({"error": "context must be an object"}))
+            try:
+                session = _sessions.attach_snapshot(
+                    platform,
+                    route[1],
+                    context,
+                    label=str(payload.get("label") or "device-context")[:80],
+                )
+            except (KeyError, ValueError):
+                return self._send(404, json.dumps({"error": "session not found"}))
+            return self._send(200, json.dumps({"session": session}, ensure_ascii=False))
+
         if route == ["run"]:
             action = str(payload.get("action", "all"))
             configuration = str(payload.get("configuration", "")).strip()
@@ -987,22 +973,30 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(400, json.dumps({"error": "action not allowed"}))
             if configuration and configuration not in ("Debug", "Release"):
                 return self._send(400, json.dumps({"error": "configuration not allowed"}))
-            if action in DEVICE_REQUIRED_ACTIONS:
+            device = None
+            device_required = (
+                action in DEVICE_REQUIRED_ACTIONS
+                or (platform == "ios" and action == "test")
+            )
+            if device_required:
                 try:
-                    require_available_device(platform)
+                    device = require_available_device(platform)
                 except DeviceToolError as exc:
                     label = ACTION_LABELS.get(action, action)
                     return self._send(409, json.dumps({
                         "error": f"未开始{label}：{exc}。请连接并解锁设备后重试。",
                         "deviceRequired": True,
                     }, ensure_ascii=False))
-            job, conflict = start_job(platform, action, configuration)
+            job, conflict = start_job(platform, action, configuration, device)
             if conflict:
                 return self._send(409, json.dumps({
                     "error": f"该平台已有任务在运行: {conflict.action}",
                     "jobId": conflict.id,
                 }))
-            return self._send(200, json.dumps({"jobId": job.id}))
+            return self._send(200, json.dumps({
+                "jobId": job.id,
+                "sessionId": job.session_id,
+            }))
 
         if route == ["link", "open"]:
             value = str(payload.get("url", "")).strip()
