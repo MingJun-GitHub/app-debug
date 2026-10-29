@@ -81,6 +81,7 @@ const pendingShortcutOpen = ref(false)
 const routeMatch = ref<RouteMatch | null>(null)
 const matchingRoute = ref(false)
 const routeMatchError = ref('')
+const routeInventoryOpen = ref(false)
 let resolveTimer: ReturnType<typeof setTimeout> | undefined
 let resolveSerial = 0
 let matchSerial = 0
@@ -376,6 +377,15 @@ onBeforeUnmount(() => {
         <p>粘贴 H5 链接，或从通用页面列表中快速选择。自动生成 Deep Link 和二维码。</p>
       </div>
       <div class="page-link-heading-actions">
+        <UButton
+          color="gray"
+          variant="ghost"
+          size="xs"
+          icon="i-heroicons-code-bracket-square"
+          @click="routeInventoryOpen = true"
+        >
+          路由清单
+        </UButton>
         <a :href="PAGE_URL_DOC" target="_blank" rel="noopener noreferrer" class="page-doc-link">
           <UIcon name="i-heroicons-document-text" />
           URL 文档
@@ -625,6 +635,11 @@ onBeforeUnmount(() => {
         :description="status"
       />
     </template>
+
+    <RouteInventoryModal
+      v-model="routeInventoryOpen"
+      :platform="platform"
+    />
   </section>
 </template>
 
@@ -687,7 +702,7 @@ onBeforeUnmount(() => {
   gap: 11px;
   border: 1px solid var(--app-border);
   border-radius: 12px;
-  background: rgba(16, 19, 26, 0.64);
+  background: var(--app-panel-soft);
   padding: 13px;
 }
 
@@ -759,8 +774,8 @@ onBeforeUnmount(() => {
 }
 
 .shortcut-item.selected {
-  border-color: rgba(74, 222, 128, 0.46);
-  background: rgba(74, 222, 128, 0.08);
+  border-color: rgb(var(--app-primary-rgb) / 0.46);
+  background: rgb(var(--app-primary-rgb) / 0.08);
   color: var(--app-text);
 }
 
@@ -812,13 +827,13 @@ onBeforeUnmount(() => {
   gap: 8px;
   border: 1px solid var(--app-border);
   border-radius: 10px;
-  background: rgba(16, 19, 26, 0.7);
+  background: var(--app-panel-soft);
   padding: 10px 12px;
 }
 
 .route-match-card.matched {
-  border-color: rgba(74, 222, 128, 0.34);
-  background: rgba(74, 222, 128, 0.045);
+  border-color: rgb(var(--app-primary-rgb) / 0.34);
+  background: rgb(var(--app-primary-rgb) / 0.045);
 }
 
 .route-match-card.missing {
@@ -914,7 +929,7 @@ onBeforeUnmount(() => {
   margin-top: 8px;
   border: 1px dashed var(--app-border-strong);
   border-radius: 12px;
-  background: rgba(16, 19, 26, 0.58);
+  background: var(--app-panel-soft);
   padding: 20px;
 }
 
@@ -924,9 +939,9 @@ onBeforeUnmount(() => {
   height: 42px;
   flex: 0 0 42px;
   place-items: center;
-  border: 1px solid rgba(74, 222, 128, 0.24);
+  border: 1px solid rgb(var(--app-primary-rgb) / 0.24);
   border-radius: 10px;
-  background: rgba(74, 222, 128, 0.08);
+  background: rgb(var(--app-primary-rgb) / 0.08);
   color: var(--app-primary);
 }
 
@@ -959,7 +974,7 @@ onBeforeUnmount(() => {
   outline: none;
   border: 1px solid var(--app-border);
   border-radius: 10px;
-  background: rgba(16, 19, 26, 0.78);
+  background: var(--app-panel-translucent);
   padding: 12px 13px;
   cursor: pointer;
   transition: border-color 140ms ease, background 140ms ease;
@@ -972,8 +987,8 @@ onBeforeUnmount(() => {
 }
 
 .link-target.selected {
-  border-color: rgba(74, 222, 128, 0.46);
-  background: rgba(74, 222, 128, 0.06);
+  border-color: rgb(var(--app-primary-rgb) / 0.46);
+  background: rgb(var(--app-primary-rgb) / 0.06);
   box-shadow: inset 3px 0 0 var(--app-primary);
 }
 
@@ -1084,7 +1099,7 @@ onBeforeUnmount(() => {
 .link-qr-code svg {
   width: 52px;
   height: 52px;
-  color: #a4acb9;
+  color: var(--app-faint);
 }
 
 .link-qr-card p {

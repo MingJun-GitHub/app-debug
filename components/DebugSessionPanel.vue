@@ -7,25 +7,22 @@ const props = defineProps<{
   platform: 'ios' | 'android'
   currentSessionId: string
   deviceContext: DeviceContext | null
-  deviceAvailable: boolean
-  busy: boolean
 }>()
 
 const emit = defineEmits<{
-  run: [action: string]
   'view-source': [location: string]
 }>()
 
 const store = useDebugSessions(props.platform)
 const selectedId = ref('')
 const copied = ref('')
+const deleteTarget = ref<SessionSummary | null>(null)
+const deleteOpen = ref(false)
+const clearOpen = ref(false)
 let copiedTimer: ReturnType<typeof setTimeout> | undefined
 
 const selected = computed(() => store.selected.value)
 const platformName = computed(() => props.platform === 'ios' ? 'iOS' : 'Android')
-const testDisabled = computed(() =>
-  props.busy || (props.platform === 'ios' && !props.deviceAvailable)
-)
 const snapshotDiff = computed(() => {
   const snapshots = selected.value?.snapshots || []
   if (snapshots.length < 2) return null
@@ -104,19 +101,50 @@ async function selectSession(sessionId: string) {
 
 async function refreshAll(selectCurrent = true) {
   await store.refresh()
-  const target = props.currentSessionId
-    || selectedId.value
-    || store.sessions.value[0]?.id
+  const preferred = [
+    props.currentSessionId,
+    selectedId.value,
+    store.sessions.value[0]?.id
+  ]
+  const target = preferred.find(id =>
+    id && store.sessions.value.some(session => session.id === id)
+  )
   if (target && selectCurrent) {
     selectedId.value = target
     await store.load(target)
   }
-  await store.loadRoutes()
 }
 
 async function saveSnapshot() {
   if (!props.deviceContext || !selectedId.value) return
   await store.saveSnapshot(selectedId.value, props.deviceContext)
+}
+
+function askDelete(session: SessionSummary) {
+  deleteTarget.value = session
+  deleteOpen.value = true
+}
+
+async function confirmDelete() {
+  const target = deleteTarget.value
+  if (!target) return
+  const deleted = await store.deleteSession(target.id)
+  if (!deleted) return
+  deleteOpen.value = false
+  deleteTarget.value = null
+  if (selectedId.value === target.id) selectedId.value = ''
+  await refreshAll()
+}
+
+function askClear() {
+  clearOpen.value = true
+}
+
+async function confirmClear() {
+  const cleared = await store.clearSessions()
+  if (!cleared) return
+  clearOpen.value = false
+  selectedId.value = ''
 }
 
 async function copyDiagnostic() {
@@ -183,24 +211,13 @@ onBeforeUnmount(() => {
       </div>
       <div class="session-actions">
         <UButton
-          color="gray"
-          variant="soft"
-          icon="i-heroicons-beaker"
-          :loading="busy"
-          :disabled="testDisabled"
-          @click="emit('run', 'test')"
+          color="red"
+          variant="ghost"
+          icon="i-heroicons-trash"
+          :disabled="!store.sessions.value.length"
+          @click="askClear"
         >
-          单元测试
-        </UButton>
-        <UButton
-          color="gray"
-          variant="soft"
-          icon="i-heroicons-shield-check"
-          :loading="busy"
-          :disabled="busy"
-          @click="emit('run', 'lint')"
-        >
-          静态检查
+          全部清除
         </UButton>
         <UButton
           color="gray"
@@ -236,26 +253,41 @@ onBeforeUnmount(() => {
           title="还没有调试会话"
           description="运行构建、单元测试或静态检查后，记录会保存在本机。"
         />
-        <button
+        <div
           v-for="session in store.sessions.value"
           :key="session.id"
-          type="button"
           class="session-history-item"
           :class="{ selected: selectedId === session.id }"
-          @click="selectSession(session.id)"
         >
-          <span class="session-history-line">
-            <strong>{{ actionLabel(session.action) }}</strong>
-            <UBadge :color="statusBadge(session.status).color" variant="subtle">
-              {{ statusBadge(session.status).label }}
-            </UBadge>
-          </span>
-          <span class="session-history-meta">
-            {{ formatTime(session.createdAt) }}
-            <template v-if="session.analysis.errorCount"> · {{ session.analysis.errorCount }} errors</template>
-          </span>
-          <code>{{ session.project.commit || session.id }}</code>
-        </button>
+          <button
+            type="button"
+            class="session-history-select"
+            @click="selectSession(session.id)"
+          >
+            <span class="session-history-line">
+              <strong>{{ actionLabel(session.action) }}</strong>
+              <UBadge :color="statusBadge(session.status).color" variant="subtle">
+                {{ statusBadge(session.status).label }}
+              </UBadge>
+            </span>
+            <span class="session-history-meta">
+              {{ formatTime(session.createdAt) }}
+              <template v-if="session.analysis.errorCount"> · {{ session.analysis.errorCount }} errors</template>
+            </span>
+            <code>{{ session.project.commit || session.id }}</code>
+          </button>
+          <UTooltip text="删除这条会话">
+            <UButton
+              color="gray"
+              variant="ghost"
+              size="xs"
+              square
+              icon="i-heroicons-trash"
+              aria-label="删除这条会话"
+              @click="askDelete(session)"
+            />
+          </UTooltip>
+        </div>
         <p v-if="store.root.value" class="session-root">{{ store.root.value }}</p>
       </aside>
 
@@ -356,11 +388,11 @@ onBeforeUnmount(() => {
               </div>
             </div>
 
-            <div v-if="selected.project.submodules?.length" class="session-submodules">
-              <div class="session-section-head">
+            <details v-if="selected.project.submodules?.length" class="session-submodules">
+              <summary>
                 <span>子模块</span>
                 <UBadge color="gray" variant="subtle">{{ selected.project.submodules.length }}</UBadge>
-              </div>
+              </summary>
               <div
                 v-for="submodule in selected.project.submodules"
                 :key="submodule.path"
@@ -376,7 +408,7 @@ onBeforeUnmount(() => {
                   {{ submodule.conflicted ? '冲突' : submodule.modified || submodule.dirty ? '有变化' : '正常' }}
                 </UBadge>
               </div>
-            </div>
+            </details>
 
             <div class="session-evidence-actions">
               <UButton
@@ -399,7 +431,10 @@ onBeforeUnmount(() => {
             </div>
           </UCard>
 
-          <div class="session-evidence-grid">
+          <div
+            v-if="selected.analysis.sourceLocations?.length || selected.analysis.errorGroups?.length"
+            class="session-evidence-grid"
+          >
             <UCard>
               <template #header>
                 <div class="card-heading">
@@ -544,32 +579,75 @@ onBeforeUnmount(() => {
           </UCard>
         </div>
       </div>
-
-      <aside class="session-routes">
-        <div class="session-section-head">
-          <span>路由清单</span>
-          <UBadge color="gray" variant="subtle">{{ store.routes.value?.count || 0 }}</UBadge>
-        </div>
-        <p>只读解析 {{ platformName }} 仓库现有路由，用于检查 Deep Link 是否仍然存在。</p>
-        <div v-if="store.routes.value?.routes.length" class="session-route-list">
-          <code
-            v-for="route in store.routes.value.routes.slice(0, 40)"
-            :key="`${route.pattern}-${route.source}`"
-            :title="route.source"
-          >
-            {{ route.pattern }}
-          </code>
-        </div>
-        <div v-else class="small-empty">暂未读取到路由。</div>
-        <UAlert
-          v-if="store.routes.value?.warnings.length"
-          color="amber"
-          variant="soft"
-          icon="i-heroicons-exclamation-triangle"
-          :description="store.routes.value.warnings.join('；')"
-        />
-      </aside>
     </div>
+
+    <UModal v-model="deleteOpen">
+      <UCard>
+        <template #header>
+          <div class="confirm-dialog-header">
+            <div class="confirm-dialog-icon bg-red-50 text-red-500 dark:bg-red-950 dark:text-red-400">
+              <UIcon name="i-heroicons-trash" />
+            </div>
+            <div>
+              <h2>删除这条调试会话？</h2>
+              <p>{{ platformName }} · {{ actionLabel(deleteTarget?.action) }}</p>
+            </div>
+          </div>
+        </template>
+        <p class="confirm-dialog-copy">
+          将删除本地保存的日志、设备快照和诊断数据。这个操作不能撤销。
+        </p>
+        <template #footer>
+          <div class="confirm-dialog-footer">
+            <UButton color="gray" variant="ghost" @click="deleteOpen = false">
+              取消
+            </UButton>
+            <UButton
+              color="red"
+              icon="i-heroicons-trash"
+              :loading="store.deleting.value"
+              @click="confirmDelete"
+            >
+              删除
+            </UButton>
+          </div>
+        </template>
+      </UCard>
+    </UModal>
+
+    <UModal v-model="clearOpen">
+      <UCard>
+        <template #header>
+          <div class="confirm-dialog-header">
+            <div class="confirm-dialog-icon bg-red-50 text-red-500 dark:bg-red-950 dark:text-red-400">
+              <UIcon name="i-heroicons-trash" />
+            </div>
+            <div>
+              <h2>清空全部 {{ platformName }} 会话？</h2>
+              <p>{{ store.sessions.value.length }} 条本地会话</p>
+            </div>
+          </div>
+        </template>
+        <p class="confirm-dialog-copy">
+          将删除当前平台全部会话、日志、设备快照和诊断数据，另一个平台不受影响。这个操作不能撤销。
+        </p>
+        <template #footer>
+          <div class="confirm-dialog-footer">
+            <UButton color="gray" variant="ghost" @click="clearOpen = false">
+              取消
+            </UButton>
+            <UButton
+              color="red"
+              icon="i-heroicons-trash"
+              :loading="store.clearing.value"
+              @click="confirmClear"
+            >
+              全部清除
+            </UButton>
+          </div>
+        </template>
+      </UCard>
+    </UModal>
   </section>
 </template>
 

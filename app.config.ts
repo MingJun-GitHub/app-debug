@@ -18,8 +18,8 @@ export default defineAppConfig({
       }
     },
     card: {
-      background: 'bg-slate-900/80',
-      ring: 'ring-1 ring-slate-800'
+      background: 'bg-white/90 dark:bg-slate-900/80',
+      ring: 'ring-1 ring-slate-200 dark:ring-slate-800'
     }
   }
 })

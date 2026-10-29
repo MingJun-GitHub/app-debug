@@ -4,12 +4,16 @@ import { ALL_LOG_FILTER, type LogFilter } from '~/types/log-filter'
 import type { HighlightPattern } from '~/utils/log-highlight'
 
 type PlatformKey = 'ios' | 'android'
-type TabKey = 'run' | 'issues' | 'logs' | 'device' | 'links' | 'sessions'
+type TabKey = 'run' | 'issues' | 'logs' | 'validation' | 'device' | 'links' | 'sessions'
 type SeverityFilter = 'all' | 'error' | 'warning' | 'network'
 
 const runners = {
   ios: useDebugRunner('ios'),
   android: useDebugRunner('android')
+}
+const validationRunners = {
+  ios: useValidationRunner('ios'),
+  android: useValidationRunner('android')
 }
 const projectSettings = useProjectSettings()
 
@@ -27,6 +31,7 @@ const refreshingDevices = reactive<Record<PlatformKey, boolean>>({ ios: false, a
 const copiedTarget = ref('')
 const stopConfirmOpen = ref(false)
 const stopping = ref(false)
+const stopTarget = ref<'run' | 'validation'>('run')
 const settingsOpen = ref(false)
 const screenshotPreviewOpen = ref(false)
 const sourceViewerOpen = ref(false)
@@ -37,6 +42,7 @@ let deviceTimer: ReturnType<typeof setInterval> | undefined
 let copyTimer: ReturnType<typeof setTimeout> | undefined
 
 const runner = computed(() => runners[platform.value])
+const validationRunner = computed(() => validationRunners[platform.value])
 const status = computed(() => runner.value.status.value)
 const physicalDevices = computed(() => runner.value.physicalDevices.value)
 const connectedDevice = computed(() => runner.value.connectedDevice.value)
@@ -71,6 +77,12 @@ const jobDone = computed(() => runner.value.jobDone.value)
 const jobResult = computed(() => runner.value.jobResult.value)
 const elapsed = computed(() => runner.value.elapsed.value)
 const busy = computed(() => runner.value.busy.value)
+const validationRunning = computed(() => validationRunner.value.running.value)
+const taskBusy = computed(() => busy.value || validationRunning.value)
+const validationActiveKind = computed({
+  get: () => validationRunner.value.activeKind.value,
+  set: value => { validationRunner.value.activeKind.value = value }
+})
 const projectConnection = computed(() =>
   projectSettings.settings.value?.projects[platform.value] || null
 )
@@ -105,6 +117,7 @@ const tabs = [
   { key: 'run', label: '运行', icon: 'i-heroicons-play' },
   { key: 'issues', label: '问题', icon: 'i-heroicons-exclamation-triangle' },
   { key: 'logs', label: '日志', icon: 'i-heroicons-document-text' },
+  { key: 'validation', label: '验证', icon: 'i-heroicons-shield-check' },
   { key: 'device', label: '设备', icon: 'i-heroicons-device-phone-mobile' },
   { key: 'links', label: '页面', icon: 'i-heroicons-arrow-top-right-on-square' },
   { key: 'sessions', label: '会话', icon: 'i-heroicons-clipboard-document-check' }
@@ -132,7 +145,7 @@ const platformTabsUi = {
       base: 'relative z-10 font-semibold',
       height: 'h-[30px]',
       active: 'text-white',
-      inactive: 'text-slate-400 hover:text-slate-200'
+      inactive: 'text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-200'
     }
   }
 }
@@ -153,7 +166,7 @@ const debugTabsUi = {
       base: 'relative z-10',
       height: 'h-[34px]',
       active: 'text-white',
-      inactive: 'text-slate-400 hover:text-slate-200'
+      inactive: 'text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-200'
     }
   }
 }
@@ -279,8 +292,27 @@ const runDotClass = computed(() => {
   return 'run-dot'
 })
 
+const stopTaskLabel = computed(() => {
+  if (stopTarget.value === 'validation') {
+    return validationRunner.value.activeKind.value === 'test' ? '单元测试' : '静态检查'
+  }
+  return activeJob.value?.action || '正在运行'
+})
+
+const statusJobId = computed(() =>
+  activeJob.value?.id
+  || (validationRunning.value ? validationRunner.value.activeJobId.value : '')
+  || 'No active job'
+)
+const statusEventCount = computed(() =>
+  validationRunning.value
+    ? validationRunner.value.activeState.value.lines.length
+    : events.value.length
+)
+
 const hasActiveJobs = computed(() =>
   Object.values(runners).some(current => current.busy.value)
+  || Object.values(validationRunners).some(current => current.running.value)
 )
 
 const firstError = computed(() => errors.value.at(-1)?.text || '')
@@ -381,6 +413,14 @@ async function handleRun(action: string) {
   await runner.value.runAction(action, buildConfiguration.value)
 }
 
+async function handleValidationRun(kind: 'test' | 'lint') {
+  await validationRunner.value.run(kind, buildConfiguration.value)
+}
+
+function clearValidation(kind: 'test' | 'lint') {
+  validationRunner.value.clear(kind)
+}
+
 async function copyText(target: string, text: string) {
   if (!text.trim()) return
   const safeText = redactSensitive(text)
@@ -420,15 +460,24 @@ function clearCurrentEvents() {
 }
 
 function requestStop() {
-  if (!busy.value) return
+  if (!taskBusy.value) return
+  stopTarget.value = activeTab.value === 'validation' && validationRunning.value
+    ? 'validation'
+    : busy.value
+      ? 'run'
+      : 'validation'
   stopConfirmOpen.value = true
 }
 
 async function confirmStop() {
-  if (!busy.value || stopping.value) return
+  if (!taskBusy.value || stopping.value) return
   stopping.value = true
   try {
-    await runner.value.stopJob()
+    if (stopTarget.value === 'validation') {
+      await validationRunner.value.stop()
+    } else {
+      await runner.value.stopJob()
+    }
     stopConfirmOpen.value = false
   } finally {
     stopping.value = false
@@ -440,6 +489,23 @@ function stopActiveJobsOnUnload() {
     const job = runners[key].activeJob.value
     if (!job) continue
     const payload = JSON.stringify({ jobId: job.id })
+    const sent = navigator.sendBeacon(
+      `/api/${key}/stop`,
+      new Blob([payload], { type: 'application/json' })
+    )
+    if (!sent) {
+      fetch(`/api/${key}/stop`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: payload,
+        keepalive: true
+      }).catch(() => {})
+    }
+  }
+  for (const key of ['ios', 'android'] as PlatformKey[]) {
+    const jobId = validationRunners[key].activeJobId.value
+    if (!validationRunners[key].running.value || !jobId) continue
+    const payload = JSON.stringify({ jobId })
     const sent = navigator.sendBeacon(
       `/api/${key}/stop`,
       new Blob([payload], { type: 'application/json' })
@@ -601,12 +667,13 @@ onBeforeUnmount(() => {
         </div>
 
         <div class="top-spacer" />
+        <ThemeColorPicker />
         <UButton
           color="gray"
           variant="ghost"
           icon="i-heroicons-wrench-screwdriver"
           class="shortcut-top"
-          :disabled="busy"
+          :disabled="taskBusy"
           @click="handleRun('doctor')"
         >
           环境检查
@@ -704,7 +771,7 @@ onBeforeUnmount(() => {
               icon="i-heroicons-play-solid"
               class="run-primary"
               :loading="busy"
-              :disabled="busy || !activeDeviceAvailable"
+              :disabled="taskBusy || !activeDeviceAvailable"
               @click="handleRun('all')"
             >
               <span>构建并启动</span>
@@ -717,7 +784,7 @@ onBeforeUnmount(() => {
                 variant="ghost"
                 icon="i-heroicons-wrench-screwdriver"
                 class="shortcut-button"
-                :disabled="busy || !activeDeviceAvailable"
+                :disabled="taskBusy || !activeDeviceAvailable"
                 @click="handleRun('build')"
               >
                 <span>构建</span>
@@ -728,7 +795,7 @@ onBeforeUnmount(() => {
                 variant="ghost"
                 icon="i-heroicons-arrow-down-tray"
                 class="shortcut-button"
-                :disabled="busy || !activeDeviceAvailable"
+                :disabled="taskBusy || !activeDeviceAvailable"
                 @click="handleRun('install')"
               >
                 <span>安装</span>
@@ -739,7 +806,7 @@ onBeforeUnmount(() => {
                 variant="ghost"
                 icon="i-heroicons-rocket-launch"
                 class="shortcut-button"
-                :disabled="busy || !activeDeviceAvailable"
+                :disabled="taskBusy || !activeDeviceAvailable"
                 @click="handleRun('launch')"
               >
                 <span>启动</span>
@@ -750,7 +817,7 @@ onBeforeUnmount(() => {
                 variant="ghost"
                 icon="i-heroicons-document-magnifying-glass"
                 class="shortcut-button"
-                :disabled="busy || !activeDeviceAvailable"
+                :disabled="taskBusy || !activeDeviceAvailable"
                 @click="handleRun('logs')"
               >
                 <span>拉日志</span>
@@ -765,7 +832,7 @@ onBeforeUnmount(() => {
             icon="i-heroicons-stop"
             class="stop-button"
             block
-            :disabled="!busy"
+            :disabled="!taskBusy"
             @click="requestStop"
           >
             停止任务
@@ -857,6 +924,24 @@ onBeforeUnmount(() => {
               @copy="copyText"
             />
 
+            <DebugValidationPane
+              v-else-if="activeTab === 'validation'"
+              :key="platform"
+              :platform="platform"
+              :configuration="buildConfiguration"
+              :states="validationRunner.states"
+              :active-kind="validationActiveKind"
+              :run-busy="busy"
+              :device-available="activeDeviceAvailable"
+              :copied-target="copiedTarget"
+              @update:active-kind="validationActiveKind = $event"
+              @run="handleValidationRun"
+              @stop="validationRunner.stop()"
+              @clear="clearValidation"
+              @copy="copyText"
+              @view-source="openSourceLocation"
+            />
+
             <PageLinkPanel
               v-else-if="activeTab === 'links'"
               :platform="platform"
@@ -870,9 +955,6 @@ onBeforeUnmount(() => {
               :platform="platform"
               :current-session-id="currentSessionId"
               :device-context="deviceContext"
-              :device-available="activeDeviceAvailable"
-              :busy="busy"
-              @run="handleRun"
               @view-source="openSourceLocation"
             />
 
@@ -891,8 +973,8 @@ onBeforeUnmount(() => {
       </div>
 
       <footer class="statusbar">
-        <span>{{ activeJob?.id || 'No active job' }}</span>
-        <span>{{ events.length }} events</span>
+        <span>{{ statusJobId }}</span>
+        <span>{{ statusEventCount }} events</span>
         <span>Local only · 127.0.0.1</span>
         <span class="toolbar-spacer" />
         <span>App Debug 0.4</span>
@@ -907,7 +989,7 @@ onBeforeUnmount(() => {
               </div>
               <div>
                 <h2>确认停止当前任务？</h2>
-                <p>{{ platformName }} · {{ activeJob?.action || '正在运行' }}</p>
+                <p>{{ platformName }} · {{ stopTaskLabel }}</p>
               </div>
             </div>
           </template>

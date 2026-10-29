@@ -12,7 +12,8 @@ iOS 与 Android 必须保持隔离：切换平台时，另一平台的设备选�
 |---|---|
 | `app.vue` | 页面结构、平台切换、Tab 和任务操作 |
 | `composables/useDebugRunner.ts` | 设备、任务、日志、设备上下文的 API 状态 |
-| `composables/useDebugSessions.ts` | 会话、设备快照、诊断导出和路由清单状态 |
+| `composables/useDebugSessions.ts` | 会话、设备快照、诊断导出和删除状态 |
+| `composables/useValidationRunner.ts` | 单元测试和静态检查的独立任务与日志状态 |
 | `server.py` | 本地 HTTP API、静态页面托管、任务进程管理 |
 | `device_context.py` | iOS plist / NSKeyedArchiver 和 Android `run-as` / MMKV / SharedPreferences 读取 |
 | `project_settings.py` | 本机项目目录持久化、项目结构校验和 Git 元数据读取 |
@@ -27,7 +28,9 @@ iOS 与 Android 必须保持隔离：切换平台时，另一平台的设备选�
 | `components/DebugRunPane.vue` | 双平台共用的运行日志面板 |
 | `components/DebugIssuesPane.vue` | 双平台共用的问题与源码定位面板 |
 | `components/DebugLogsPane.vue` | 双平台共用的日志检索面板 |
+| `components/DebugValidationPane.vue` | 独立验证工作区和验证日志 |
 | `components/SourceViewerModal.vue` | 项目内源码行号查看器 |
+| `components/RouteInventoryModal.vue` | 页面路由清单弹窗 |
 | `run163.sh`、`runandroid.sh` | 两端的构建、安装、启动、日志和环境检查 |
 | `tests/test_device_context.py` | 设备上下文解析测试 |
 | `tests/test_project_settings.py` | 项目关联、校验和分支读取测试 |

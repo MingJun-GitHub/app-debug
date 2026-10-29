@@ -24,6 +24,21 @@ const emit = defineEmits<{
 const colors = ['#ff5263', '#ffd84d', '#4ade80', '#60a5fa', '#ffffff']
 const brushSizes = [4, 8, 14]
 const selectedColor = ref(colors[0])
+
+function themePrimaryColor() {
+  if (!import.meta.client) return '#4ade80'
+  return getComputedStyle(document.documentElement)
+    .getPropertyValue('--app-primary')
+    .trim() || '#4ade80'
+}
+
+function themePrimaryAlpha(alpha: number) {
+  const fallback = '74 222 128'
+  const channels = import.meta.client
+    ? getComputedStyle(document.documentElement).getPropertyValue('--app-primary-rgb').trim() || fallback
+    : fallback
+  return `rgba(${channels.split(/\s+/).join(', ')}, ${alpha})`
+}
 const selectedSize = ref(brushSizes[1])
 const strokes = ref<Stroke[]>([])
 const currentStroke = ref<Stroke | null>(null)
@@ -261,8 +276,8 @@ async function composeImage() {
     0,
     output.width * 0.72
   )
-  glow.addColorStop(0, 'rgba(74, 222, 128, 0.16)')
-  glow.addColorStop(1, 'rgba(74, 222, 128, 0)')
+  glow.addColorStop(0, themePrimaryAlpha(0.16))
+  glow.addColorStop(1, themePrimaryAlpha(0))
   context.fillStyle = glow
   context.fillRect(0, 0, output.width, output.height)
 
@@ -272,7 +287,7 @@ async function composeImage() {
   context.fillStyle = '#8c97aa'
   context.font = '15px -apple-system, BlinkMacSystemFont, sans-serif'
   context.fillText(props.deviceName || '当前设备', margin + 112, 38)
-  context.fillStyle = '#4ade80'
+  context.fillStyle = themePrimaryColor()
   context.beginPath()
   context.arc(output.width - margin - 106, 31, 4, 0, Math.PI * 2)
   context.fill()
@@ -749,8 +764,8 @@ onBeforeUnmount(() => {
   border: 1px solid var(--app-border);
   border-radius: 12px;
   background:
-    radial-gradient(circle at 50% 0%, rgba(74, 222, 128, 0.13), transparent 52%),
-    linear-gradient(145deg, #0c1119, #070a0f);
+    radial-gradient(circle at 50% 0%, rgb(var(--app-primary-rgb) / 0.13), transparent 52%),
+    linear-gradient(145deg, var(--app-stage-start), var(--app-stage-end));
   padding: 20px;
 }
 
@@ -910,7 +925,7 @@ onBeforeUnmount(() => {
   place-items: center;
   border: 1px solid var(--app-border);
   border-radius: 7px;
-  background: rgba(255, 255, 255, 0.025);
+  background: var(--app-surface-soft);
 }
 
 .screenshot-size span {
@@ -920,7 +935,7 @@ onBeforeUnmount(() => {
 
 .screenshot-size.selected {
   border-color: var(--app-primary);
-  background: rgba(74, 222, 128, 0.09);
+  background: rgb(var(--app-primary-rgb) / 0.09);
 }
 
 .screenshot-tool-actions {
@@ -936,9 +951,9 @@ onBeforeUnmount(() => {
   align-items: flex-start;
   gap: 9px;
   margin-top: 2px;
-  border: 1px solid rgba(74, 222, 128, 0.16);
+  border: 1px solid rgb(var(--app-primary-rgb) / 0.16);
   border-radius: 9px;
-  background: rgba(74, 222, 128, 0.045);
+  background: rgb(var(--app-primary-rgb) / 0.045);
   padding: 10px;
 }
 

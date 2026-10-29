@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 import threading
 from datetime import datetime
 from pathlib import Path
@@ -251,6 +252,27 @@ class SessionStore:
             "contentType": content_type,
             "filename": f"app-debug-{platform}-{session_id}.{extension}",
         }
+
+    def delete(self, platform: str, session_id: str) -> bool:
+        directory = self._dir(platform, session_id)
+        if not directory.is_dir():
+            return False
+        with _store_lock:
+            shutil.rmtree(directory)
+        return True
+
+    def clear(self, platform: str) -> int:
+        root = self._platform_dir(platform)
+        if not root.is_dir():
+            return 0
+        removed = 0
+        with _store_lock:
+            for directory in root.iterdir():
+                if not directory.is_dir() or not _safe_id(directory.name):
+                    continue
+                shutil.rmtree(directory)
+                removed += 1
+        return removed
 
     def _markdown(self, session: dict[str, Any]) -> str:
         project = session.get("project") or {}

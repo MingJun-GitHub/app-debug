@@ -128,6 +128,25 @@ class SessionStoreTest(unittest.TestCase):
             data = json.loads(json_export["content"])
             self.assertEqual(data["id"], "abcdef123456")
             self.assertNotIn("not-safe", json_export["content"])
+            self.assertTrue(store.delete("android", "abcdef123456"))
+            self.assertIsNone(store.get("android", "abcdef123456"))
+
+    def test_clears_platform_sessions_only(self):
+        with tempfile.TemporaryDirectory() as temp:
+            store = SessionStore(temp)
+            for platform in ("ios", "android"):
+                store.create(
+                    platform=platform,
+                    session_id=f"{platform}123456",
+                    action="lint",
+                    configuration="Debug",
+                    project={},
+                    device={},
+                    artifact={},
+                )
+            self.assertEqual(store.clear("ios"), 1)
+            self.assertEqual(store.list("ios"), [])
+            self.assertEqual(len(store.list("android")), 1)
 
 
 class RouteInventoryTest(unittest.TestCase):

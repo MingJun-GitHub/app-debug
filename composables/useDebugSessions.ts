@@ -86,19 +86,6 @@ export interface DiagnosticExport {
   filename: string
 }
 
-export interface RouteInventory {
-  platform: 'ios' | 'android'
-  project: string
-  count: number
-  routes: Array<{
-    pattern: string
-    kind: string
-    source: string
-    line: number | null
-  }>
-  warnings: string[]
-}
-
 async function requestJSON<T>(url: string, options?: RequestInit): Promise<T> {
   const response = await fetch(url, options)
   const data = await response.json()
@@ -109,11 +96,12 @@ async function requestJSON<T>(url: string, options?: RequestInit): Promise<T> {
 export function useDebugSessions(platform: 'ios' | 'android') {
   const sessions = ref<SessionSummary[]>([])
   const selected = ref<DebugSession | null>(null)
-  const routes = ref<RouteInventory | null>(null)
   const loading = ref(false)
   const loadingDetail = ref(false)
   const savingSnapshot = ref(false)
   const exporting = ref(false)
+  const deleting = ref(false)
+  const clearing = ref(false)
   const error = ref('')
   const root = ref('')
 
@@ -192,29 +180,67 @@ export function useDebugSessions(platform: 'ios' | 'android') {
     }
   }
 
-  async function loadRoutes() {
+  async function deleteSession(sessionId: string) {
+    if (!sessionId) return false
+    deleting.value = true
+    error.value = ''
     try {
-      routes.value = await requestJSON<RouteInventory>(`/api/${platform}/routes`)
+      await requestJSON(
+        `/api/${platform}/sessions/${encodeURIComponent(sessionId)}/delete`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ confirm: true })
+        }
+      )
+      if (selected.value?.id === sessionId) selected.value = null
+      await refresh()
+      return true
     } catch (cause) {
-      error.value = cause instanceof Error ? cause.message : '读取路由清单失败'
+      error.value = cause instanceof Error ? cause.message : '删除会话失败'
+      return false
+    } finally {
+      deleting.value = false
+    }
+  }
+
+  async function clearSessions() {
+    clearing.value = true
+    error.value = ''
+    try {
+      await requestJSON(`/api/${platform}/sessions/clear`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ confirm: true })
+      })
+      selected.value = null
+      sessions.value = []
+      return true
+    } catch (cause) {
+      error.value = cause instanceof Error ? cause.message : '清空会话失败'
+      return false
+    } finally {
+      clearing.value = false
     }
   }
 
   return {
     sessions,
     selected,
-    routes,
     loading,
     loadingDetail,
     savingSnapshot,
     exporting,
+    deleting,
+    clearing,
     error,
     root,
     refresh,
     load,
     saveSnapshot,
     exportSession,
-    loadRoutes
+    deleteSession,
+    clearSessions
   }
 }
 

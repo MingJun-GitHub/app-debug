@@ -1008,6 +1008,23 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(404, json.dumps({"error": "session not found"}))
             return self._send(200, json.dumps({"session": session}, ensure_ascii=False))
 
+        if route == ["sessions", "clear"]:
+            if payload.get("confirm") is not True:
+                return self._send(400, json.dumps({"error": "clear confirmation required"}))
+            removed = _sessions.clear(platform)
+            return self._send(200, json.dumps({"cleared": removed}, ensure_ascii=False))
+
+        if len(route) == 3 and route[0] == "sessions" and route[2] == "delete":
+            if payload.get("confirm") is not True:
+                return self._send(400, json.dumps({"error": "delete confirmation required"}))
+            try:
+                deleted = _sessions.delete(platform, route[1])
+            except ValueError:
+                deleted = False
+            if not deleted:
+                return self._send(404, json.dumps({"error": "session not found"}))
+            return self._send(200, json.dumps({"deleted": True}))
+
         if route == ["run"]:
             action = str(payload.get("action", "all"))
             configuration = str(payload.get("configuration", "")).strip()
