@@ -132,20 +132,20 @@ const platformTabsUi = {
   wrapper: 'space-y-0',
   list: {
     base: 'relative',
-    rounded: 'rounded-[10px]',
-    padding: 'p-[3px]',
-    height: 'h-[38px]',
-    width: 'w-[235px]',
+    rounded: 'rounded-lg',
+    padding: 'p-0.5',
+    height: 'h-9',
+    width: 'w-[224px]',
     marker: {
-      wrapper: 'absolute top-[3px] left-[3px] duration-200 ease-out',
-      base: 'rounded-[7px] shadow-[0_2px_8px_rgba(0,0,0,0.35)]',
-      background: 'bg-primary-500 dark:bg-primary-500'
+      wrapper: 'absolute top-0.5 left-0.5 duration-[160ms] ease-out',
+      base: 'rounded-md ring-1 ring-slate-200 dark:ring-slate-700',
+      background: 'bg-white dark:bg-slate-800'
     },
     tab: {
-      base: 'relative z-10 font-semibold',
-      height: 'h-[30px]',
-      active: 'text-white',
-      inactive: 'text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-200'
+      base: 'relative z-10 text-xs font-medium',
+      height: 'h-8',
+      active: 'text-primary-700 dark:text-primary-200',
+      inactive: 'text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-100'
     }
   }
 }
@@ -155,18 +155,18 @@ const debugTabsUi = {
   list: {
     base: 'relative',
     rounded: 'rounded-lg',
-    padding: 'p-[3px]',
-    height: 'h-[40px]',
+    padding: 'p-1',
+    height: 'h-11',
     marker: {
-      wrapper: 'absolute top-[3px] left-[3px] duration-200 ease-out',
-      base: 'rounded-md shadow-sm',
-      background: 'bg-primary-500 dark:bg-primary-500'
+      wrapper: 'absolute top-1 left-1 duration-[160ms] ease-out',
+      base: 'rounded-md ring-1 ring-slate-200 dark:ring-slate-700',
+      background: 'bg-white dark:bg-slate-800'
     },
     tab: {
-      base: 'relative z-10',
-      height: 'h-[34px]',
-      active: 'text-white',
-      inactive: 'text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-200'
+      base: 'relative z-10 text-xs',
+      height: 'h-9',
+      active: 'text-primary-700 dark:text-primary-200',
+      inactive: 'text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-100'
     }
   }
 }
@@ -302,7 +302,7 @@ const stopTaskLabel = computed(() => {
 const statusJobId = computed(() =>
   activeJob.value?.id
   || (validationRunning.value ? validationRunner.value.activeJobId.value : '')
-  || 'No active job'
+  || '无活动任务'
 )
 const statusEventCount = computed(() =>
   validationRunning.value
@@ -632,7 +632,7 @@ onBeforeUnmount(() => {
           </div>
           <div>
             <div class="brand-title">App Debug</div>
-            <div class="brand-subtitle">LOCAL DEBUG WORKSPACE</div>
+            <div class="brand-subtitle">本地调试工作台</div>
           </div>
         </div>
 
@@ -731,7 +731,7 @@ onBeforeUnmount(() => {
             <UAlert
               v-if="deviceAlert"
               :color="deviceAlert.color"
-              variant="soft"
+              variant="outline"
               :icon="deviceAlert.icon"
               :title="deviceAlert.title"
               :description="deviceAlert.description"
@@ -852,15 +852,17 @@ onBeforeUnmount(() => {
           <div class="main-head">
             <div>
               <h1>{{ platformName }} 调试台</h1>
-              <p>构建、安装、启动、日志和错误定位在一个独立工作流里完成。</p>
+              <p>在本机完成构建、安装、启动、日志与源码定位</p>
             </div>
             <div class="top-spacer" />
-            <UBadge :color="sdk ? 'green' : 'gray'" variant="subtle">
-              {{ sdk || 'SDK 未发现' }}
-            </UBadge>
-            <UBadge :color="connectedDevice?.available ? 'green' : 'red'" variant="subtle">
-              {{ connectedDevice?.name || '设备未连接' }}
-            </UBadge>
+            <div class="runtime-state" :data-tone="sdk ? 'ready' : 'idle'">
+              <span class="status-led" aria-hidden="true" />
+              <span>{{ sdk || 'SDK 未发现' }}</span>
+            </div>
+            <div class="runtime-state" :data-tone="connectedDevice?.available ? 'ready' : 'error'">
+              <span class="status-led" aria-hidden="true" />
+              <span>{{ connectedDevice?.name || '设备未连接' }}</span>
+            </div>
           </div>
 
           <div class="main-content">
@@ -974,8 +976,8 @@ onBeforeUnmount(() => {
 
       <footer class="statusbar">
         <span>{{ statusJobId }}</span>
-        <span>{{ statusEventCount }} events</span>
-        <span>Local only · 127.0.0.1</span>
+        <span>{{ statusEventCount }} 条事件</span>
+        <span>仅本地 · 127.0.0.1</span>
         <span class="toolbar-spacer" />
         <span>App Debug 0.4</span>
       </footer>

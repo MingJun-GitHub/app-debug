@@ -3,8 +3,12 @@ withDefaults(defineProps<{
   icon: string
   title: string
   description: string
+  label?: string
+  meta?: string
 }>(), {
-  icon: 'i-heroicons-inbox'
+  icon: 'i-heroicons-inbox',
+  label: '',
+  meta: ''
 })
 </script>
 
@@ -13,13 +17,18 @@ withDefaults(defineProps<{
     class="empty-panel"
     :ui="{
       body: {
-        base: 'flex h-full items-center justify-center',
-        padding: 'p-6 sm:p-8'
+        base: 'empty-panel-body',
+        padding: 'p-0 sm:p-0'
       }
     }"
   >
+    <div v-if="label" class="empty-panel-rail">
+      <span class="empty-panel-led" aria-hidden="true" />
+      <span>{{ label }}</span>
+      <span class="empty-panel-meta">{{ meta }}</span>
+    </div>
     <div class="empty-panel-content">
-      <div class="empty-panel-icon bg-primary-50 text-primary-500 dark:bg-primary-950 dark:text-primary-400">
+      <div class="empty-panel-icon">
         <UIcon :name="icon" />
       </div>
       <h2 class="empty-panel-title">{{ title }}</h2>

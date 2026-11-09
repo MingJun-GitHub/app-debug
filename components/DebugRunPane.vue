@@ -73,9 +73,10 @@ watch(() => props.events.length, async () => {
         <UButton
           v-for="item in severityOptions"
           :key="item.key"
-          :color="severity === item.key ? 'primary' : 'gray'"
-          :variant="severity === item.key ? 'soft' : 'ghost'"
+          color="gray"
+          variant="ghost"
           size="xs"
+          :class="{ 'filter-chip-active': severity === item.key }"
           @click="emit('update:severity', item.key)"
         >
           {{ item.label }}
@@ -94,7 +95,7 @@ watch(() => props.events.length, async () => {
         id="event-keyword-filter"
         v-model="keywordQuery"
         icon="i-heroicons-magnifying-glass"
-        placeholder="二次搜索关键词"
+        placeholder="搜索日志"
         class="keyword-filter"
       />
       <UButton
@@ -114,13 +115,19 @@ watch(() => props.events.length, async () => {
       v-if="!events.length"
       class="pane-body"
       icon="i-heroicons-command-line"
-      title="还没有运行记录"
-      :description="`点击「构建并启动」，${platformName} 日志会实时出现在这里。`"
+      label="运行输出"
+      meta="stdout"
+      title="等待运行输出"
+      :description="activeDeviceAvailable
+        ? `点击「构建并启动」，${platformName} 日志会实时写入这里。`
+        : `连接并授权 ${platformName} 设备后，构建、安装与日志会显示在这里。`"
     />
     <AppEmptyState
       v-else-if="!filteredEvents.length"
       class="pane-body"
       icon="i-heroicons-funnel"
+      label="运行输出"
+      meta="filtered"
       title="没有匹配记录"
       description="调整关键字或筛选条件后重试。"
     />
